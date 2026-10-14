@@ -1,0 +1,12 @@
+appId: com.aquario.app
+productName: Aquario
+directories:
+  output: dist
+  buildResources: build
+files:
+  - out/**/*
+asar: true
+npmRebuild: false
+win:
+  target: portable
+  artifactName: Aquario-${version}.exe
