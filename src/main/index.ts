@@ -14,7 +14,7 @@ function createWindow(): void {
     height: 820,
     minWidth: 900,
     minHeight: 600,
-    title: 'Aquário',
+    title: 'Aquarium',
     backgroundColor: '#0c1518',
     autoHideMenuBar: true,
     webPreferences: {

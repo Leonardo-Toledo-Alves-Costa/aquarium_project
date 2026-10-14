@@ -54,13 +54,26 @@ Como não há servidor para mandar endereços aos poucos, o app espera a coleta 
 
 As predefinições ficam em `rtc/presets.ts`:
 
-| Predefinição | Captura | Taxa máxima por espectador | Quando a banda aperta |
-|---|---|---|---|
-| Jogo | até 1080p, 60 fps | 10 Mbps | mantém os fps |
-| Vídeo | até 1080p, 30 fps | 5 Mbps | equilibra |
-| Código e texto | resolução nativa, 15 fps | 2,5 Mbps | mantém a resolução |
+| Predefinição | Captura | Banda por espectador (início / piso / teto) |
+|---|---|---|
+| Jogo | até 1080p, 60 fps | 6 / 1,5 / 16 Mbps |
+| Vídeo | até 1080p, 30 fps | 4 / 1 / 8 Mbps |
+| Código e texto | resolução nativa, 15 fps | 2,5 / 0,8 / 4 Mbps |
 
-O codec preferido é H.264, que tem codificação por GPU na maioria das placas; VP9 e VP8 ficam como alternativa.
+Quem transmite escolhe também:
+
+- **Prioridade** quando falta banda ou placa de vídeo: *Nitidez* (mantém a resolução e perde fps, padrão), *Equilíbrio* ou *Fluidez* (mantém os fps e reduz a resolução). Vale na hora.
+- **Codec:** automático (H.264, depois VP9), H.264, VP9 ou AV1. Vale para os próximos espectadores, porque trocar exige renegociar a conexão.
+
+O início e o piso de banda são aplicados com os parâmetros `x-google-*-bitrate` na resposta recebida (`rtc/sdp.ts`); sem eles, o WebRTC começa em ~300 kbps e demora a subir.
+
+### Por que a imagem ficava borrada (v0.1)
+
+A predefinição de jogo mantinha os fps a qualquer custo. Com conteúdo pesado, o WebRTC reduzia a resolução de 1080p para 720p e a imagem ficava borrada. Num teste com conteúdo sintético difícil, a v0.2 com *Nitidez* manteve 1920×1080 a 11–12 Mbps.
+
+### Diagnóstico
+
+O botão "Copiar diagnóstico" (dos dois lados) gera um texto com a configuração, a rota, a resolução capturada e a enviada, a banda estimada, o codec, e quanto tempo a qualidade ficou limitada pela banda ou pela CPU/GPU. Do lado de quem assiste, mostra perda de pacotes, jitter, quadros descartados e travamentos.
 
 ## Segurança
 

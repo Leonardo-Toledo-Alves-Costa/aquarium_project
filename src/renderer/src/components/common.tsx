@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { describeRoute, LIMITATION_TEXT, mbps, num } from '../diagnostics'
 import type { PeerStatus } from '../rtc/peer'
-import type { StatsSample, StatsSampler } from '../rtc/stats'
+import { isDownscaled, type StatsSample, type StatsSampler } from '../rtc/stats'
 
 const STATUS_TEXT: Record<PeerStatus, string> = {
   aguardando: 'Aguardando resposta',
@@ -24,17 +25,24 @@ export function FailureHelp(): React.JSX.Element {
   )
 }
 
+async function copyText(text: string, fallback: HTMLTextAreaElement | null): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch {
+    fallback?.select()
+    return false
+  }
+}
+
 export function CopyBox({ label, value }: { label: string; value: string }): React.JSX.Element {
   const [copied, setCopied] = useState(false)
   const ref = useRef<HTMLTextAreaElement>(null)
 
   const copy = async (): Promise<void> => {
-    try {
-      await navigator.clipboard.writeText(value)
+    if (await copyText(value, ref.current)) {
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
-    } catch {
-      ref.current?.select()
     }
   }
 
@@ -46,6 +54,22 @@ export function CopyBox({ label, value }: { label: string; value: string }): Rea
         {copied ? 'Copiado' : 'Copiar código'}
       </button>
     </div>
+  )
+}
+
+/** Copia o diagnóstico na hora do clique, com os dados mais recentes. */
+export function CopyDiagnosticsButton({ build }: { build: () => string }): React.JSX.Element {
+  const [copied, setCopied] = useState(false)
+  const copy = async (): Promise<void> => {
+    if (await copyText(build(), null)) {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
+  }
+  return (
+    <button className="ghost small" onClick={copy}>
+      {copied ? 'Diagnóstico copiado' : 'Copiar diagnóstico'}
+    </button>
   )
 }
 
@@ -69,41 +93,47 @@ export function useStats(sampler: StatsSampler, active: boolean): StatsSample | 
   return sample
 }
 
-const LIMITATION_TEXT: Record<string, string> = {
-  cpu: 'qualidade limitada pela CPU/GPU',
-  bandwidth: 'qualidade limitada pela banda',
-  other: 'qualidade limitada (outro motivo)'
-}
-
 export function StatsLine({ sample }: { sample: StatsSample | null }): React.JSX.Element | null {
   if (!sample) return null
-  const { route } = sample
   const items: string[] = []
+  const warnings: string[] = []
 
-  if (route) {
+  const route = describeRoute(sample)
+  if (route) items.push(route)
+
+  if (sample.width && sample.height) {
     items.push(
-      route.direct
-        ? `Direto · ${route.ipVersion} · ${route.localType} → ${route.remoteType}`
-        : `Relay · ${route.ipVersion}`
+      isDownscaled(sample)
+        ? `${sample.width}×${sample.height} de ${sample.sourceWidth}×${sample.sourceHeight}`
+        : `${sample.width}×${sample.height}`
     )
-    if (route.rttMs !== undefined) items.push(`${route.rttMs} ms de ida e volta`)
   }
-  if (sample.width && sample.height) items.push(`${sample.width}×${sample.height}`)
   if (sample.fps !== undefined) items.push(`${Math.round(sample.fps)} fps`)
-  if (sample.kbps !== undefined) items.push(`${(sample.kbps / 1000).toFixed(1).replace('.', ',')} Mbps`)
+  if (sample.kbps !== undefined) items.push(mbps(sample.kbps))
+  if (sample.route?.availableKbps !== undefined) items.push(`banda estimada ${mbps(sample.route.availableKbps)}`)
   if (sample.codec) {
     const impl = sample.implementation ? ` (${sample.implementation}${sample.hardware ? ', GPU' : ''})` : ''
     items.push(`${sample.codec}${impl}`)
   }
-  if (sample.packetsLost) items.push(`${sample.packetsLost} pacotes perdidos`)
-  if (sample.jitterMs !== undefined) items.push(`jitter ${sample.jitterMs} ms`)
+  if (sample.lossPercent) items.push(`perda ${num(sample.lossPercent)}%`)
+  if (sample.freezeCount) items.push(`${sample.freezeCount} travamentos`)
 
-  const limitation = sample.limitation ? LIMITATION_TEXT[sample.limitation] : undefined
+  const reason = sample.limitation && sample.limitation !== 'none' ? sample.limitation : undefined
+  const cause = reason === 'other' ? 'por outro motivo' : reason ? `por falta de ${LIMITATION_TEXT[reason]}` : ''
+  if (isDownscaled(sample)) {
+    warnings.push(`resolução reduzida ${cause}`.trim())
+  } else if (reason) {
+    warnings.push(`qualidade limitada ${cause}`)
+  }
 
   return (
     <div className="stats">
       <span>{items.join('  ·  ')}</span>
-      {limitation && <span className="stats-warn">{limitation}</span>}
+      {warnings.map((w) => (
+        <span key={w} className="stats-warn">
+          {w}
+        </span>
+      ))}
     </div>
   )
 }

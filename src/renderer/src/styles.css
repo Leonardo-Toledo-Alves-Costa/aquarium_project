@@ -279,8 +279,18 @@ textarea.code {
   align-items: center;
   gap: 12px;
 }
-.card-head button {
+.card-actions {
   margin-left: auto;
+  display: flex;
+  gap: 8px;
+}
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px 16px;
+}
+.controls .field {
+  flex: 1 1 240px;
 }
 .pair {
   display: flex;

@@ -22,10 +22,10 @@ export async function decodeDescription(code: string, expected: DescriptionType)
   const [prefix, tag, payload] = code.replace(/\s+/g, '').split('.')
 
   if (prefix?.startsWith('AQ') && prefix !== PREFIX) {
-    throw new CodeError('Esse código é de outra versão do Aquário. Os dois precisam usar a mesma versão.')
+    throw new CodeError('Esse código é de outra versão do Aquarium. Os dois precisam usar a mesma versão.')
   }
   if (prefix !== PREFIX || !tag || !payload) {
-    throw new CodeError('Isso não parece um código do Aquário. Copie o código inteiro de novo.')
+    throw new CodeError('Isso não parece um código do Aquarium. Copie o código inteiro de novo.')
   }
   if (tag !== TAG[expected]) {
     throw new CodeError(

@@ -1,5 +1,5 @@
-appId: com.aquario.app
-productName: Aquario
+appId: com.aquarium.app
+productName: Aquarium
 directories:
   output: dist
   buildResources: build
@@ -9,4 +9,4 @@ asar: true
 npmRebuild: false
 win:
   target: portable
-  artifactName: Aquario-${version}.exe
+  artifactName: Aquarium-${version}.exe

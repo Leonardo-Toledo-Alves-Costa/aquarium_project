@@ -7,7 +7,7 @@ export interface CaptureSource {
   thumbnail: string
 }
 
-export interface AquarioApi {
+export interface AquariumApi {
   listSources(): Promise<CaptureSource[]>
   selectSource(id: string): Promise<void>
   platform: string

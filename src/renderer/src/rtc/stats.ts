@@ -11,6 +11,8 @@ export interface RouteInfo {
   ipVersion: 'IPv4' | 'IPv6' | '?'
   protocol: string
   rttMs?: number
+  /** Banda que o WebRTC estima ter disponível para enviar, em kbps. */
+  availableKbps?: number
 }
 
 export interface StatsSample {
@@ -23,10 +25,25 @@ export interface StatsSample {
   /** Implementação do codificador/decodificador, quando o navegador informa. */
   implementation?: string
   hardware?: boolean
-  /** Só para quem transmite: o que está segurando a qualidade (cpu, bandwidth, none). */
+
+  // Só para quem transmite
+  /** O que está segurando a qualidade agora: cpu, bandwidth, other ou none. */
   limitation?: string
+  /** Segundos acumulados com a qualidade limitada, por motivo. */
+  limitationSeconds?: { cpu: number; bandwidth: number; other: number }
+  targetKbps?: number
+  /** Resolução e fps que saem da captura, antes da codificação. */
+  sourceWidth?: number
+  sourceHeight?: number
+  sourceFps?: number
+
+  // Só para quem assiste
   packetsLost?: number
+  lossPercent?: number
   jitterMs?: number
+  framesDropped?: number
+  freezeCount?: number
+  freezeSeconds?: number
 }
 
 function ipVersionOf(...addresses: (string | undefined)[]): RouteInfo['ipVersion'] {
@@ -37,13 +54,15 @@ function ipVersionOf(...addresses: (string | undefined)[]): RouteInfo['ipVersion
   return '?'
 }
 
+const round1 = (n: number): number => Math.round(n * 10) / 10
+
 export class StatsSampler {
   private prevBytes?: number
   private prevTimestamp?: number
 
   constructor(
     private readonly pc: RTCPeerConnection,
-    private readonly direction: 'enviando' | 'recebendo'
+    readonly direction: 'enviando' | 'recebendo'
   ) {}
 
   async sample(): Promise<StatsSample> {
@@ -53,10 +72,12 @@ export class StatsSampler {
 
     let pair: Stat | undefined
     let rtp: Stat | undefined
+    let source: Stat | undefined
     const rtpType = this.direction === 'enviando' ? 'outbound-rtp' : 'inbound-rtp'
     for (const s of byId.values()) {
       if (s.type === 'transport' && s.selectedCandidatePairId) pair = byId.get(s.selectedCandidatePairId)
       if (s.type === rtpType && s.kind === 'video') rtp = s
+      if (s.type === 'media-source' && s.kind === 'video') source = s
     }
     if (!pair) {
       for (const s of byId.values()) {
@@ -76,7 +97,12 @@ export class StatsSampler {
           remoteType: remote.candidateType,
           ipVersion: ipVersionOf(remote.address, local.address),
           protocol: local.protocol,
-          rttMs: typeof pair.currentRoundTripTime === 'number' ? Math.round(pair.currentRoundTripTime * 1000) : undefined
+          rttMs: typeof pair.currentRoundTripTime === 'number' ? Math.round(pair.currentRoundTripTime * 1000) : undefined,
+          // Do lado de quem assiste, essa estimativa é da banda de volta (controle), não do vídeo.
+          availableKbps:
+            this.direction === 'enviando' && typeof pair.availableOutgoingBitrate === 'number'
+              ? Math.round(pair.availableOutgoingBitrate / 1000)
+              : undefined
         }
       }
     }
@@ -100,14 +126,40 @@ export class StatsSampler {
         sample.implementation = rtp.encoderImplementation
         sample.hardware = rtp.powerEfficientEncoder
         sample.limitation = rtp.qualityLimitationReason
+        const durations = rtp.qualityLimitationDurations
+        if (durations) {
+          sample.limitationSeconds = {
+            cpu: round1(durations.cpu ?? 0),
+            bandwidth: round1(durations.bandwidth ?? 0),
+            other: round1(durations.other ?? 0)
+          }
+        }
+        if (typeof rtp.targetBitrate === 'number') sample.targetKbps = Math.round(rtp.targetBitrate / 1000)
+        if (source) {
+          sample.sourceWidth = source.width
+          sample.sourceHeight = source.height
+          sample.sourceFps = source.framesPerSecond
+        }
       } else {
         sample.implementation = rtp.decoderImplementation
         sample.hardware = rtp.powerEfficientDecoder
         sample.packetsLost = rtp.packetsLost
+        if (typeof rtp.packetsLost === 'number' && typeof rtp.packetsReceived === 'number') {
+          const total = rtp.packetsLost + rtp.packetsReceived
+          sample.lossPercent = total > 0 ? round1((rtp.packetsLost / total) * 100) : 0
+        }
         if (typeof rtp.jitter === 'number') sample.jitterMs = Math.round(rtp.jitter * 1000)
+        sample.framesDropped = rtp.framesDropped
+        sample.freezeCount = rtp.freezeCount
+        if (typeof rtp.totalFreezesDuration === 'number') sample.freezeSeconds = round1(rtp.totalFreezesDuration)
       }
     }
 
     return sample
   }
+}
+
+/** true quando o vídeo enviado está menor que a captura (o WebRTC reduziu a resolução). */
+export function isDownscaled(sample: StatsSample): boolean {
+  return !!(sample.height && sample.sourceHeight && sample.height < sample.sourceHeight * 0.95)
 }

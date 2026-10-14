@@ -1,5 +1,6 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
-import { CopyBox, FailureHelp, StatsLine, StatusChip, useStats } from '../components/common'
+import { CopyBox, CopyDiagnosticsButton, FailureHelp, StatsLine, StatusChip, useStats } from '../components/common'
+import { formatDiagnostics } from '../diagnostics'
 import { Receiver } from '../rtc/receiver'
 import { CodeError, decodeDescription, encodeDescription } from '../signaling/manual'
 
@@ -124,6 +125,7 @@ function Player({ receiver, onLeave }: { receiver: Receiver; onLeave: () => void
         <button className="ghost" onClick={() => setShowStats((s) => !s)}>
           {showStats ? 'Ocultar dados da conexão' : 'Mostrar dados da conexão'}
         </button>
+        <CopyDiagnosticsButton build={() => formatDiagnostics({ role: 'assistindo' }, stats)} />
         <button className="danger" onClick={onLeave}>
           Sair
         </button>

@@ -34,6 +34,8 @@ Os outros números:
 - **ms de ida e volta:** latência da rede (não inclui codificação e exibição).
 - **qualidade limitada pela CPU/GPU ou pela banda:** o que está segurando a qualidade, do lado de quem transmite.
 
+A partir da v0.2, o botão **Copiar diagnóstico** junta tudo isso num texto só. Se a imagem estiver ruim, os dois lados copiam o diagnóstico e colam no grupo.
+
 ## Resultados
 
 | Data | Transmite | Assiste | Predefinição | Conectou? | Rota | fps | Resolução | Mbps | Ida e volta | Observações |
@@ -51,3 +53,21 @@ Executado com o código real do app dentro do Electron 44, usando um vídeo sint
 - No app real, a captura da tela cheia em 1920×1080 com áudio do sistema funcionou, e o convite foi gerado.
 
 Esse teste não substitui o teste entre casas diferentes: na mesma máquina não existe NAT no caminho.
+
+## Primeiro teste real (v0.1, 2026-10-14)
+
+Conexão direta com uma pessoa na Bahia. Funcionou, mas a imagem chegou borrada. A causa provável era a predefinição de jogo, que mantinha os fps reduzindo a resolução. Isso foi corrigido na v0.2 (ver "Por que a imagem ficava borrada" em [ARCHITECTURE.md](ARCHITECTURE.md)).
+
+## Teste automático de qualidade (v0.2, 2026-10-14, uma máquina)
+
+Conteúdo sintético difícil de comprimir (centenas de retângulos aleatórios por quadro), 1920×1080 a 60 fps, predefinição Jogo:
+
+| | Equilíbrio | Nitidez (novo padrão) |
+|---|---|---|
+| Resolução enviada após 3 s | 1280×720 | 1920×1080 |
+| Banda | 8–14 Mbps | 11–12 Mbps |
+| Limitação | banda | nenhuma |
+
+- Com o início de banda ajustado, a transmissão já estava acima de 11 Mbps no primeiro segundo.
+- O convite passou a ser gerado em ~1 s (antes 5 s), ainda com o endereço público incluído. A conexão completa caiu de 5,7 s para 1,7 s.
+- VP9 e AV1 negociaram corretamente quando escolhidos.

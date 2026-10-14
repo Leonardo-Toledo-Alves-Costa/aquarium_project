@@ -1,5 +1,6 @@
 import { createPeerConnection, peerStatus, preferVideoCodecs, waitForIceGathering, type PeerStatus } from './peer'
-import type { Preset } from './presets'
+import { CODECS, PRIORITIES, type CodecChoice, type StreamSettings } from './presets'
+import { withBitrateHints } from './sdp'
 import { StatsSampler } from './stats'
 
 export interface ViewerSlot {
@@ -11,6 +12,14 @@ export interface ViewerSlot {
   answered: boolean
   status: PeerStatus
   stats: StatsSampler
+  /** Codec escolhido quando o espectador foi adicionado; trocar exige um convite novo. */
+  codec: CodecChoice
+}
+
+export interface CaptureInfo {
+  width?: number
+  height?: number
+  fps?: number
 }
 
 /**
@@ -25,24 +34,24 @@ export class Broadcaster {
 
   private constructor(
     readonly stream: MediaStream,
-    private currentPreset: Preset
+    private current: StreamSettings
   ) {
     this.videoTrack.addEventListener('ended', () => this.stop())
   }
 
   /** A fonte (tela ou janela) já deve ter sido escolhida no processo principal. */
-  static async start(preset: Preset): Promise<Broadcaster> {
+  static async start(settings: StreamSettings): Promise<Broadcaster> {
     const stream = await navigator.mediaDevices.getDisplayMedia({
-      video: { frameRate: preset.fps },
+      video: { frameRate: settings.preset.fps },
       audio: true
     })
-    const broadcaster = new Broadcaster(stream, preset)
+    const broadcaster = new Broadcaster(stream, settings)
     await broadcaster.applyTrackSettings()
     return broadcaster
   }
 
-  get preset(): Preset {
-    return this.currentPreset
+  get settings(): StreamSettings {
+    return this.current
   }
 
   get viewers(): readonly ViewerSlot[] {
@@ -51,6 +60,11 @@ export class Broadcaster {
 
   get hasAudio(): boolean {
     return this.stream.getAudioTracks().length > 0
+  }
+
+  get capture(): CaptureInfo {
+    const s = this.videoTrack.getSettings()
+    return { width: s.width, height: s.height, fps: s.frameRate }
   }
 
   private get videoTrack(): MediaStreamTrack {
@@ -67,13 +81,14 @@ export class Broadcaster {
   }
 
   async addViewer(): Promise<ViewerSlot> {
+    const { preset, codec } = this.current
     const pc = createPeerConnection()
     const video = pc.addTransceiver(this.videoTrack, {
       direction: 'sendonly',
       streams: [this.stream],
-      sendEncodings: [{ maxBitrate: this.currentPreset.maxBitrate, maxFramerate: this.currentPreset.fps }]
+      sendEncodings: [{ maxBitrate: preset.maxBitrate, maxFramerate: preset.fps, scaleResolutionDownBy: 1 }]
     })
-    preferVideoCodecs(video)
+    preferVideoCodecs(video, CODECS[codec].mime)
     for (const audio of this.stream.getAudioTracks()) {
       pc.addTransceiver(audio, { direction: 'sendonly', streams: [this.stream] })
     }
@@ -89,7 +104,8 @@ export class Broadcaster {
       offer: pc.localDescription!.toJSON(),
       answered: false,
       status: 'aguardando',
-      stats: new StatsSampler(pc, 'enviando')
+      stats: new StatsSampler(pc, 'enviando'),
+      codec
     }
     pc.addEventListener('connectionstatechange', () => {
       slot.status = peerStatus(pc)
@@ -103,8 +119,14 @@ export class Broadcaster {
   async acceptAnswer(id: number, answer: RTCSessionDescriptionInit): Promise<void> {
     const slot = this.slots.find((s) => s.id === id)
     if (!slot) throw new Error('Esse espectador não existe mais')
-    if (answer.type !== 'answer') throw new Error('O código colado não é uma resposta')
-    await slot.pc.setRemoteDescription(answer)
+    if (answer.type !== 'answer' || !answer.sdp) throw new Error('O código colado não é uma resposta')
+    const { preset } = this.current
+    const sdp = withBitrateHints(answer.sdp, {
+      startKbps: preset.startKbps,
+      minKbps: preset.minKbps,
+      maxKbps: preset.maxBitrate / 1000
+    })
+    await slot.pc.setRemoteDescription({ type: 'answer', sdp })
     slot.answered = true
     slot.status = peerStatus(slot.pc)
     await this.applySenderParameters(slot.pc)
@@ -117,8 +139,9 @@ export class Broadcaster {
     this.emit()
   }
 
-  async setPreset(preset: Preset): Promise<void> {
-    this.currentPreset = preset
+  /** Qualidade e prioridade valem na hora; o codec só vale para os próximos espectadores. */
+  async update(changes: Partial<StreamSettings>): Promise<void> {
+    this.current = { ...this.current, ...changes }
     await this.applyTrackSettings()
     await Promise.all(this.slots.map((s) => this.applySenderParameters(s.pc)))
     this.emit()
@@ -133,7 +156,7 @@ export class Broadcaster {
   }
 
   private async applyTrackSettings(): Promise<void> {
-    const preset = this.currentPreset
+    const { preset } = this.current
     this.videoTrack.contentHint = preset.contentHint
     try {
       await this.videoTrack.applyConstraints({
@@ -146,14 +169,15 @@ export class Broadcaster {
   }
 
   private async applySenderParameters(pc: RTCPeerConnection): Promise<void> {
-    const preset = this.currentPreset
+    const { preset, priority } = this.current
     for (const sender of pc.getSenders()) {
       if (sender.track?.kind !== 'video') continue
       const params = sender.getParameters() as RTCRtpSendParameters & { degradationPreference?: string }
       if (!params.encodings?.length) continue
       params.encodings[0].maxBitrate = preset.maxBitrate
       params.encodings[0].maxFramerate = preset.fps
-      params.degradationPreference = preset.degradation
+      params.encodings[0].scaleResolutionDownBy = 1
+      params.degradationPreference = PRIORITIES[priority].degradation
       try {
         await sender.setParameters(params)
       } catch (err) {

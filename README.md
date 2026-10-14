@@ -1,4 +1,4 @@
-# Aquário
+# Aquarium
 
 Compartilhamento de tela P2P para uso interno do grupo. Substitui o compartilhamento de tela do Discord para jogos, código e vídeos.
 
@@ -19,7 +19,7 @@ Na primeira execução o Electron baixa o próprio binário (~100 MB).
 npm run dist:win
 ```
 
-O resultado é `dist/Aquario-<versão>.exe`, um executável portátil (não precisa instalar). Como ele não é assinado digitalmente, o Windows mostra o aviso do SmartScreen: clique em "Mais informações" e depois em "Executar assim mesmo".
+O resultado é `dist/Aquarium-<versão>.exe`, um executável portátil (não precisa instalar). Como ele não é assinado digitalmente, o Windows mostra o aviso do SmartScreen: clique em "Mais informações" e depois em "Executar assim mesmo".
 
 ## Como fazer uma transmissão
 
@@ -43,7 +43,7 @@ O objetivo é descobrir, com as conexões reais do grupo, quem consegue conectar
 - **Mesh:** cada espectador é uma codificação a mais na placa de vídeo e uma fatia a mais do upload. Funciona bem até 3 ou 4 pessoas.
 - **Áudio do sistema só no Windows**, e ele vai inteiro: se você estiver em chamada no Discord, quem assiste ouve a chamada também.
 - **Tela cheia exclusiva** pode aparecer preta. Use o modo "janela sem borda" nos jogos.
-- Os códigos têm ~2,5 mil caracteres. Alguns apps de mensagem quebram o texto em linhas; o Aquário ignora as quebras.
+- Os códigos têm ~2,5 mil caracteres. Alguns apps de mensagem quebram o texto em linhas; o Aquarium ignora as quebras.
 
 ## Estrutura
 

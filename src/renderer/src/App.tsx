@@ -10,7 +10,7 @@ export function App(): React.JSX.Element {
   return (
     <div className="app">
       <header className="topbar">
-        <span className="brand">Aquário</span>
+        <span className="brand">Aquarium</span>
         {mode !== 'inicio' && (
           <button className="ghost" onClick={() => setMode('inicio')}>
             Sair e voltar ao início

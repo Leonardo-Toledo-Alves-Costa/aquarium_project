@@ -7,7 +7,7 @@ export const ICE_SERVERS: RTCIceServer[] = [
 ]
 
 // H.264 primeiro porque é o codec com codificação por GPU mais comum no Windows.
-const VIDEO_CODEC_ORDER = ['video/H264', 'video/VP9', 'video/VP8']
+const DEFAULT_CODEC_ORDER = ['video/H264', 'video/VP9', 'video/VP8']
 
 export type PeerStatus = 'aguardando' | 'conectando' | 'conectado' | 'instavel' | 'falhou' | 'encerrado'
 
@@ -34,30 +34,43 @@ export function peerStatus(pc: RTCPeerConnection): PeerStatus {
 
 /**
  * Sem servidor de sinalização não dá para mandar endereços aos poucos,
- * então esperamos a coleta terminar e colocamos tudo em um código só.
+ * então esperamos a coleta e colocamos tudo em um código só. A coleta às vezes
+ * demora a "terminar" por causa de interfaces de rede sem saída; por isso
+ * encerramos pouco depois do primeiro endereço público (srflx) chegar.
  */
-export function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = 5000): Promise<void> {
+export function waitForIceGathering(pc: RTCPeerConnection, timeoutMs = 5000, afterPublicMs = 1000): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve()
   return new Promise((resolve) => {
+    let early: ReturnType<typeof setTimeout> | undefined
     const done = (): void => {
       clearTimeout(timer)
+      clearTimeout(early)
       pc.removeEventListener('icegatheringstatechange', onChange)
+      pc.removeEventListener('icecandidate', onCandidate)
       resolve()
     }
     const onChange = (): void => {
       if (pc.iceGatheringState === 'complete') done()
     }
+    const onCandidate = (event: RTCPeerConnectionIceEvent): void => {
+      if (event.candidate?.type === 'srflx' && !early) early = setTimeout(done, afterPublicMs)
+    }
     const timer = setTimeout(done, timeoutMs)
     pc.addEventListener('icegatheringstatechange', onChange)
+    pc.addEventListener('icecandidate', onCandidate)
   })
 }
 
-export function preferVideoCodecs(transceiver: RTCRtpTransceiver): void {
+/** Ordena os codecs oferecidos; o escolhido vai na frente e os outros ficam de reserva. */
+export function preferVideoCodecs(transceiver: RTCRtpTransceiver, preferredMime?: string): void {
   const capabilities = RTCRtpReceiver.getCapabilities('video')
   if (!capabilities) return
+  const order = preferredMime
+    ? [preferredMime, ...DEFAULT_CODEC_ORDER.filter((m) => m !== preferredMime)]
+    : DEFAULT_CODEC_ORDER
   const rank = (mime: string): number => {
-    const i = VIDEO_CODEC_ORDER.indexOf(mime)
-    return i === -1 ? VIDEO_CODEC_ORDER.length : i
+    const i = order.indexOf(mime)
+    return i === -1 ? order.length : i
   }
   const sorted = [...capabilities.codecs].sort((a, b) => rank(a.mimeType) - rank(b.mimeType))
   try {

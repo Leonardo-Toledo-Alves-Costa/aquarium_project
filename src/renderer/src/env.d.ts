@@ -1,10 +1,11 @@
 /// <reference types="vite/client" />
-import type { AquarioApi } from '../../shared/ipc'
+import type { AquariumApi } from '../../shared/ipc'
 
 declare global {
   interface Window {
-    aquario: AquarioApi
+    aquarium: AquariumApi
   }
+  const __APP_VERSION__: string
 }
 
 export {}

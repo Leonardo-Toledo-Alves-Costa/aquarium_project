@@ -1,6 +1,6 @@
 {
-  "name": "aquario",
-  "version": "0.1.0",
+  "name": "aquarium",
+  "version": "0.2.0",
   "description": "Compartilhamento de tela P2P para uso interno",
   "private": true,
   "author": "Miguel Luiz",
