@@ -1,5 +1,7 @@
 // Leitura das estatísticas do WebRTC: o que a prova de conceito precisa medir.
 
+import type { NetworkSample } from './governor'
+
 type Stat = Record<string, any>
 
 export interface RouteInfo {
@@ -155,6 +157,22 @@ export class StatsSampler {
       }
     }
 
+    return sample
+  }
+
+  /** Atraso, perda e jitter do vídeo enviado, como quem recebe informa de volta (RTCP). */
+  async network(): Promise<NetworkSample> {
+    const report = await this.pc.getStats()
+    const sample: NetworkSample = {}
+    report.forEach((s: Stat) => {
+      if (s.type === 'candidate-pair' && s.nominated && s.state === 'succeeded' && typeof s.currentRoundTripTime === 'number') {
+        sample.rttMs = Math.round(s.currentRoundTripTime * 1000)
+      }
+      if (s.type === 'remote-inbound-rtp' && s.kind === 'video') {
+        if (typeof s.fractionLost === 'number') sample.fractionLost = s.fractionLost
+        if (typeof s.jitter === 'number') sample.jitterMs = Math.round(s.jitter * 1000)
+      }
+    })
     return sample
   }
 }

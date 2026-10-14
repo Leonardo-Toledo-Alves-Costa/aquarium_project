@@ -71,3 +71,25 @@ Conteúdo sintético difícil de comprimir (centenas de retângulos aleatórios 
 - Com o início de banda ajustado, a transmissão já estava acima de 11 Mbps no primeiro segundo.
 - O convite passou a ser gerado em ~1 s (antes 5 s), ainda com o endereço público incluído. A conexão completa caiu de 5,7 s para 1,7 s.
 - VP9 e AV1 negociaram corretamente quando escolhidos.
+
+## Testes automáticos da v0.3 (2026-10-14, uma máquina, servidor local)
+
+**Servidor de salas** (16/16): rotas inválidas recusadas, grupo criado na primeira entrada com 3 salas, senha errada recusada e desconectada, presença, sinais só dentro da mesma sala, transmissão visível para todos, criar/apagar sala, reconexão do mesmo aparelho derruba a conexão antiga, versão diferente recusada, saída some da lista, excesso de mensagens derruba a conexão.
+
+**Sala com três pessoas** (20/20): A e B transmitindo ao mesmo tempo; B assiste A, C assiste A e B, A assiste B. O vídeo começa a chegar ~0,3 s depois de pedir para assistir; cada um envia só para quem pediu; parar de assistir, parar de transmitir e sair da sala não afetam os outros.
+
+**Limite automático de banda** (rede simulada): 16 Mbps estável → 5,1 Mbps após 8 s de rede congestionada → piso de 3,2 Mbps → volta ao teto em pouco mais de um minuto de rede estável.
+
+**Interface com dois apps abertos** ("Miguel" e "Bia"): criar grupo, entrar com o código digitado em minúsculas e com espaços, entrar na sala, transmitir a tela (1920×1080), "Assistir": vídeo em 0,6 s, 1080p a 52 fps.
+
+**Áudio por programa**, com um programa "Tom 440" (440 Hz) transmitido e um falso `Discord.exe` tocando 660 Hz ao mesmo tempo, medido por frequência do lado de quem assiste:
+
+| Modo | 440 Hz | 660 Hz ("Discord") |
+|---|---|---|
+| Só o app transmitido | 0,0396 (chegou) | 0,0000 (bloqueado) |
+| Todos os apps | 0,0397 (chegou) | 0,0000 (bloqueado) |
+| Sem áudio | 0,0000 | 0,0000 |
+
+A troca de modo com a transmissão rodando funcionou sem derrubar a conexão, e o `aquarium-audio.exe` encerrou junto com o app.
+
+Ainda falta: testar entre casas diferentes com o servidor publicado na Cloudflare, e em Windows 10.

@@ -1,58 +1,63 @@
-# Arquitetura
+# Arquitetura (v0.3)
 
 ## Visão geral
 
 ```
-PC de quem transmite                                    PC de quem assiste
-┌──────────────────────────────────┐                    ┌──────────────────────┐
-│ main: escolhe tela/janela        │                    │                      │
-│   + áudio do sistema (Windows)   │                    │                      │
-│ renderer:                        │                    │ renderer:            │
-│   Broadcaster                    │  convite / resposta │   Receiver           │
-│   ├─ RTCPeerConnection #1 ───────┼─── (por mensagem) ─┼─► RTCPeerConnection  │
-│   ├─ RTCPeerConnection #2 ──► …  │                    │   └─ <video>         │
-│   └─ …  (uma por espectador)     │ ══ vídeo direto ══►│                      │
-└──────────────────────────────────┘    (DTLS-SRTP)     └──────────────────────┘
+                    Cloudflare Worker (um Durable Object por grupo)
+                    quem está online · salas · repasse de sinais cifrados
+                        ▲              ▲              ▲
+                    WebSocket      WebSocket      WebSocket
+                        │              │              │
+   ┌────────────────────┴──┐   ┌───────┴─────────┐   ┌┴────────────────┐
+   │ Miguel                │   │ Bia             │   │ Rafa            │
+   │ transmite Valorant    │◄═►│ transmite       │◄═►│ só assiste      │
+   │ assiste Bia           │   │ Minecraft       │   │                 │
+   └───────────────────────┘   └─────────────────┘   └─────────────────┘
+              ╚═══════════ uma conexão WebRTC por par (mesh) ═══════════╝
 ```
 
-- **Mídia:** WebRTC, cifrado de ponta a ponta pelo próprio protocolo (DTLS-SRTP).
-- **Topologia:** mesh. Quem transmite abre uma conexão por espectador.
-- **Travessia de NAT:** STUN público (Google e Cloudflare), que só informa o endereço público de cada PC. Não há relay.
-- **Sinalização:** manual. O convite (oferta SDP) e a resposta são comprimidos e trocados como texto.
+- **Sinalização:** servidor de salas no Cloudflare Workers ([server/](../server)). Só presença, salas e repasse de sinais; o conteúdo dos sinais vai cifrado com a chave do grupo.
+- **Mídia:** WebRTC direto entre os PCs, cifrado (DTLS-SRTP). Uma conexão por par de pessoas na mesma sala.
+- **Quem envia o quê:** cada um envia vídeo só para quem clicou em "Assistir". Qualquer um pode começar ou parar de transmitir a qualquer momento; a conexão é renegociada sozinha ("perfect negotiation").
+- **Travessia de NAT:** STUN público (Google e Cloudflare). Sem relay por enquanto.
 
-## Processos do Electron
+## Código do grupo
+
+`AQG-` + 26 caracteres (128 bits aleatórios, base32 de Crockford). Dele saem, por HKDF-SHA-256:
+
+| Derivado | Para quê | Quem vê |
+|---|---|---|
+| id do grupo (128 bits) | endereço `/g/<id>/ws` no servidor | servidor |
+| senha de entrada (256 bits) | o servidor guarda só o hash | servidor (hash) |
+| chave AES-GCM (256 bits) | cifra os sinais entre os PCs, amarrados a quem envia e a quem recebe | só os PCs do grupo |
+
+O código fica guardado cifrado pelo Windows (DPAPI, via `safeStorage` do Electron).
+
+## Processos
 
 | Processo | Arquivo | Responsabilidade |
 |---|---|---|
-| Principal | `src/main/index.ts` | Janela, permissões, lista de telas/janelas, entrega da captura com áudio |
-| Preload | `src/preload/index.ts` | Expõe só `listSources`, `selectSource` e `platform` para a interface |
-| Interface | `src/renderer/src/` | React, WebRTC, códigos, estatísticas |
+| Principal | `src/main/index.ts` | Janela, permissões, lista de telas/janelas, código do grupo cifrado |
+| Principal | `src/main/audio.ts` | Roda o `aquarium-audio.exe` e repassa o PCM à página por `MessagePort` |
+| Preload | `src/preload/index.ts` | Expõe só a API do `AquariumApi` (sem acesso ao Node) |
+| Interface | `src/renderer/src/` | React, WebRTC, salas, interface Palco |
+| Módulo de áudio | `native/audio/aquarium-audio.cpp` | Captura de áudio por programa (veja a [decisão 0003](decisions/0003-audio-por-programa.md)) |
 
-A interface roda com `contextIsolation`, `sandbox` e sem acesso ao Node. Só as permissões de captura de tela, mídia, cópia para a área de transferência e tela cheia são aceitas; as demais são negadas. Navegação e abertura de novas janelas são bloqueadas.
+A interface roda com `contextIsolation`, `sandbox` e sem Node. Permissões aceitas: captura de tela, mídia, cópia para a área de transferência e tela cheia. Navegação e novas janelas são bloqueadas. A política de conteúdo só permite conexões com o servidor local e `*.workers.dev`.
 
 ## Camadas da interface
 
-| Pasta | Sabe sobre | Não sabe sobre |
+| Pasta | Faz | Não sabe |
 |---|---|---|
-| `rtc/` | WebRTC, qualidade, estatísticas | Como o convite chega até o outro PC |
-| `signaling/` | Formato dos códigos (`AQ1.C.…` / `AQ1.R.…`) | WebRTC além do SDP |
-| `views/` | Fluxo das telas | Detalhes de rede |
-
-Para passar para a opção B (relay e sinalização numa VPS) ou C (rede privada), basta trocar `signaling/` e acrescentar servidores TURN em `rtc/peer.ts`. A captura, a codificação e a interface de vídeo continuam iguais.
-
-## Formato dos códigos
-
-```
-AQ1 . C . <SDP comprimido com deflate-raw, em base64url>
- │    └─ C = convite (offer), R = resposta (answer)
- └─ versão do formato; versões diferentes são recusadas com uma mensagem clara
-```
-
-Como não há servidor para mandar endereços aos poucos, o app espera a coleta de candidatos ICE terminar (até 5 s) antes de gerar o código.
+| `group/` | Código do grupo e chaves | Rede |
+| `signaling/rooms.ts` | Conexão com o servidor, reconexão, cifra dos sinais | WebRTC |
+| `signaling/manual.ts` | Convite/resposta por texto (modo sem servidor) | Servidor |
+| `rtc/room-session.ts` | Uma conexão por pessoa da sala, assistir/transmitir, renegociação | Interface |
+| `rtc/governor.ts` | Limite automático de banda por espectador | WebRTC |
+| `audio/` | Trilha de áudio a partir do PCM do módulo | Programas capturados |
+| `ui/` | Interface "Palco" | Detalhes de rede |
 
 ## Qualidade
-
-As predefinições ficam em `rtc/presets.ts`:
 
 | Predefinição | Captura | Banda por espectador (início / piso / teto) |
 |---|---|---|
@@ -60,21 +65,12 @@ As predefinições ficam em `rtc/presets.ts`:
 | Vídeo | até 1080p, 30 fps | 4 / 1 / 8 Mbps |
 | Código e texto | resolução nativa, 15 fps | 2,5 / 0,8 / 4 Mbps |
 
-Quem transmite escolhe também:
+- **Quando faltar banda:** Nitidez (padrão; mantém a resolução), Equilíbrio ou Fluidez (mantém os fps).
+- **Limite de banda:** Automático (padrão) ou fixo em 6/10/16 Mbps. No automático, a cada 2 s o teto cai 25% se a latência subir mais que o dobro da mínima (ou 40 ms), a perda passar de 5% ou o jitter passar de 60 ms; com ~6 s estável, sobe 15%. Isso evita os travamentos vistos no teste com a Bahia (jitter de 155 ms).
+- **Codec de vídeo:** automático (H.264, depois VP9), H.264, VP9 ou AV1.
+- **Áudio:** Opus estéreo a 128 kbps.
+- Início e piso de banda vão nos parâmetros `x-google-*-bitrate` do SDP recebido (`rtc/sdp.ts`).
 
-- **Prioridade** quando falta banda ou placa de vídeo: *Nitidez* (mantém a resolução e perde fps, padrão), *Equilíbrio* ou *Fluidez* (mantém os fps e reduz a resolução). Vale na hora.
-- **Codec:** automático (H.264, depois VP9), H.264, VP9 ou AV1. Vale para os próximos espectadores, porque trocar exige renegociar a conexão.
+## Diagnóstico
 
-O início e o piso de banda são aplicados com os parâmetros `x-google-*-bitrate` na resposta recebida (`rtc/sdp.ts`); sem eles, o WebRTC começa em ~300 kbps e demora a subir.
-
-### Por que a imagem ficava borrada (v0.1)
-
-A predefinição de jogo mantinha os fps a qualquer custo. Com conteúdo pesado, o WebRTC reduzia a resolução de 1080p para 720p e a imagem ficava borrada. Num teste com conteúdo sintético difícil, a v0.2 com *Nitidez* manteve 1920×1080 a 11–12 Mbps.
-
-### Diagnóstico
-
-O botão "Copiar diagnóstico" (dos dois lados) gera um texto com a configuração, a rota, a resolução capturada e a enviada, a banda estimada, o codec, e quanto tempo a qualidade ficou limitada pela banda ou pela CPU/GPU. Do lado de quem assiste, mostra perda de pacotes, jitter, quadros descartados e travamentos.
-
-## Segurança
-
-O app parte do princípio de que o código pode ser lido por qualquer pessoa: não existe senha, chave nem credencial dentro dele. Na opção A, quem decide é quem transmite: a conexão só acontece quando essa pessoa cola a resposta, então ter só o convite não basta para assistir. Cada convite atende um único espectador e deixa de valer quando é usado ou quando o espectador é removido.
+"Copiar diagnóstico", no menu do botão direito de qualquer transmissão, gera um texto com a rota (direta/relay, IPv4/IPv6, latência), a resolução e os fps enviados e recebidos, a banda estimada, o codec, e quanto tempo a qualidade ficou limitada pela banda ou pela CPU/GPU.

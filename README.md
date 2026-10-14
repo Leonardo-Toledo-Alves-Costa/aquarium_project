@@ -1,14 +1,40 @@
 # Aquarium
 
-Compartilhamento de tela P2P para uso interno do grupo. Substitui o compartilhamento de tela do Discord para jogos, código e vídeos.
+Compartilhamento de tela P2P para uso interno do grupo. Substitui o compartilhamento de tela do Discord para jogos, código e vídeos; a conversa por voz continua no Discord.
 
-Esta é a **prova de conceito da opção A**: o vídeo vai direto de um PC para o outro e não existe nenhum servidor nosso. Os PCs se encontram trocando dois códigos por mensagem (WhatsApp, por exemplo).
+- **Salas:** qualquer pessoa da sala pode transmitir e assistir quem quiser, ao mesmo tempo.
+- **Vídeo direto entre os PCs** (WebRTC, cifrado). O servidor só ajuda os PCs a se encontrarem.
+- **Áudio por programa:** vai o som do jogo (ou de todos os apps), e **nunca** o do Discord nem o do próprio Aquarium, para não dar retorno.
 
-## Rodar em desenvolvimento
+## Estrutura
+
+```
+src/
+├─ main/                processo principal do Electron: janela, permissões, captura, módulo de áudio
+├─ preload/             ponte segura entre o processo principal e a interface
+├─ shared/              contratos: mensagens com o servidor (rooms-protocol) e com o processo principal (ipc)
+└─ renderer/src/
+   ├─ group/            código do grupo e chaves derivadas dele
+   ├─ signaling/        como os PCs se encontram: servidor de salas (rooms) ou códigos manuais (manual)
+   ├─ rtc/              WebRTC: sessão da sala (mesh), qualidade, limite automático de banda, estatísticas
+   ├─ audio/            trilha de áudio alimentada pelo módulo nativo
+   ├─ ui/               interface "Palco"
+   └─ views/            modo manual (sem servidor), da v0.2
+server/                 servidor de salas (Cloudflare Worker + Durable Objects)
+native/                 aquarium-audio.exe: captura de áudio por programa (C++, API do Windows)
+docs/                   arquitetura, decisões e resultados de testes
+```
+
+## Desenvolvimento
+
+Pré-requisitos: Node 22+, e para o módulo de áudio o Visual Studio com "Desenvolvimento para desktop com C++" e o Windows 11 SDK.
 
 ```sh
 npm install
-npm run dev
+npm --prefix server install
+npm run build:native     # gera native/bin/aquarium-audio.exe
+npm run server           # servidor de salas local em ws://127.0.0.1:8787
+npm run dev              # o app (em outro terminal)
 ```
 
 Na primeira execução o Electron baixa o próprio binário (~100 MB).
@@ -19,46 +45,27 @@ Na primeira execução o Electron baixa o próprio binário (~100 MB).
 npm run dist:win
 ```
 
-O resultado é `dist/Aquarium-<versão>.exe`, um executável portátil (não precisa instalar). Como ele não é assinado digitalmente, o Windows mostra o aviso do SmartScreen: clique em "Mais informações" e depois em "Executar assim mesmo".
+Gera `dist/Aquarium-<versão>.exe`, portátil (não precisa instalar), já com o módulo de áudio. O Windows mostra o aviso do SmartScreen porque o executável não é assinado: "Mais informações" → "Executar assim mesmo".
 
-## Como fazer uma transmissão
+O endereço do servidor vem de `VITE_AQUARIUM_SERVER` na hora do build (padrão: o servidor local). Depois de publicar o servidor (veja [server/README.md](server/README.md)), gere o executável com:
 
-| Quem transmite | Quem assiste |
-|---|---|
-| 1. Abre o app, clica em **Transmitir minha tela** e escolhe a tela ou janela | |
-| 2. Clica em **Adicionar espectador** e manda o convite (`AQ1.C…`) | |
-| | 3. Abre o app, clica em **Assistir** e cola o convite |
-| | 4. Clica em **Gerar resposta** e devolve a resposta (`AQ1.R…`) |
-| 5. Cola a resposta e clica em **Conectar** | 6. A imagem aparece |
+```sh
+VITE_AQUARIUM_SERVER=wss://aquarium.<sua-conta>.workers.dev npm run dist:win
+```
 
-Cada espectador tem o seu próprio convite. Para mais gente, repita a partir do passo 2.
+Cada pessoa também pode trocar o servidor em Configurações → Rede e diagnóstico.
 
-## Prova de conceito
+## Como usar
 
-O objetivo é descobrir, com as conexões reais do grupo, quem consegue conectar direto. O roteiro e a tabela para anotar os resultados estão em [docs/poc-resultados.md](docs/poc-resultados.md).
+1. **Primeiro acesso:** escolha seu nome e crie um grupo (o app mostra o código `AQG-…` para mandar ao grupo) ou cole o código que te mandaram.
+2. **Entre numa sala** pela barra à esquerda ou pelo seletor no topo.
+3. **Transmitir:** escolha a tela ou janela, a qualidade e o áudio.
+4. **Assistir:** clique em "Assistir" na transmissão de alguém. Clique com o botão direito numa transmissão para volume (até 200%), silenciar, tela cheia e diagnóstico; na sua, para o áudio enviado.
 
 ## Limitações conhecidas
 
-- **CGNAT simétrico não conecta.** É o limite da opção A; o teste vai mostrar se isso afeta alguém do grupo.
-- **Mesh:** cada espectador é uma codificação a mais na placa de vídeo e uma fatia a mais do upload. Funciona bem até 3 ou 4 pessoas.
-- **Áudio do sistema só no Windows**, e ele vai inteiro: se você estiver em chamada no Discord, quem assiste ouve a chamada também.
+- **CGNAT simétrico não conecta** direto, e ainda não há relay (TURN). O teste da Bahia conectou direto.
+- **Mesh:** cada pessoa assistindo é uma codificação a mais e uma fatia a mais do upload. Funciona bem até 3 ou 4 pessoas assistindo a mesma transmissão.
+- **Áudio por programa exige Windows 11** (ou Windows 10 build 20348+; versões anteriores podem funcionar, não testado). Sem ele, a transmissão vai sem áudio.
 - **Tela cheia exclusiva** pode aparecer preta. Use o modo "janela sem borda" nos jogos.
-- Os códigos têm ~2,5 mil caracteres. Alguns apps de mensagem quebram o texto em linhas; o Aquarium ignora as quebras.
-
-## Estrutura
-
-```
-src/
-├─ main/                processo principal do Electron: janela, permissões, captura
-├─ preload/             ponte segura entre o processo principal e a interface
-├─ shared/              contrato entre os dois (tipos e nomes das mensagens)
-└─ renderer/src/
-   ├─ rtc/              WebRTC: quem transmite, quem assiste, qualidade, estatísticas
-   ├─ signaling/        como os PCs se encontram (hoje: códigos manuais)
-   ├─ components/       peças de interface reutilizadas
-   └─ views/            telas de transmitir e assistir
-docs/
-├─ ARCHITECTURE.md      como as partes se encaixam
-├─ decisions/           registro das decisões e dos motivos
-└─ poc-resultados.md    roteiro e resultados do teste
-```
+- Quem tem o código do grupo entra. Para tirar alguém, é preciso criar um grupo novo.

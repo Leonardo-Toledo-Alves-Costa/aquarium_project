@@ -5,6 +5,10 @@ directories:
   buildResources: build
 files:
   - out/**/*
+# Módulo de captura de áudio por programa (native/build.cmd gera o .exe).
+extraResources:
+  - from: native/bin/aquarium-audio.exe
+    to: aquarium-audio.exe
 asar: true
 npmRebuild: false
 win:

@@ -1,0 +1,72 @@
+{
+  "version": 1,
+  "project": {
+    "name": "aquarium",
+    "productType": "desktop app (Electron) for internal P2P screen sharing in small groups, Discord-like rooms",
+    "stack": ["react", "vite", "electron", "typescript"]
+  },
+  "sources": {
+    "tokens": ["src/renderer/src/styles.css"],
+    "components": ["src/renderer/src/components/common.tsx"],
+    "assets": [],
+    "instructions": ["docs/ARCHITECTURE.md"]
+  },
+  "design": {
+    "colorMode": "dark",
+    "colors": {
+      "bg": "#0c1518",
+      "surface": "#131f24",
+      "surface-2": "#1a2a30",
+      "fg": "#e2ebed",
+      "muted": "#95a8ae",
+      "line": "#26363c",
+      "accent": "#55c2cc",
+      "ok": "#5fcb8d",
+      "warn": "#e3a849",
+      "bad": "#f07d70"
+    },
+    "typography": {
+      "body": "Segoe UI Variable Text, Segoe UI, system-ui",
+      "mono": "Cascadia Mono, Consolas"
+    },
+    "spacing": {},
+    "radius": { "base": "8px" },
+    "shadows": {},
+    "motion": {},
+    "density": "compact"
+  },
+  "components": {
+    "installed": [],
+    "preferredPrimitives": ["plain React + CSS (no Tailwind, no component library yet)"],
+    "patterns": ["stats line in monospace", "status chips", "copy-code boxes"]
+  },
+  "constraints": {
+    "must": [
+      "Portuguese (pt-BR) UI copy",
+      "works offline from bundled assets (Electron, strict CSP: no remote fonts or scripts)",
+      "desktop window from 900x600 up",
+      "keyboard focus visible",
+      "any room member can start/stop streaming and watch any stream"
+    ],
+    "avoid": ["Discord logo, name, mascots or exact brand colors", "remote assets"]
+  },
+  "decisions": [
+    {
+      "date": "2026-10-14",
+      "decision": "Direction B 'Palco' (stage-first): video fills the window; room switcher in the top bar; floating room rail on the left; bottom dock with Transmitir, Som, Qualidade, Layout, Configurações, Sair",
+      "why": "small, closed group that keeps using Discord for voice; the app is mostly for watching",
+      "also": [
+        "right-click on a stream opens audio options: per-stream volume/mute for viewers; audio source (only the shared app / all apps / none) for your own stream",
+        "Discord and Aquarium are never captured in stream audio (avoid echo/feedback)",
+        "settings dialog from the dock: quality defaults, bandwidth cap (auto by default), blocked apps, audio defaults, output device"
+      ],
+      "reference": "https://claude.ai/artifact/1TwPxfvFNNiszKjwkVfWuK"
+    }
+  ],
+  "evidence": [
+    { "fact": "project.stack:react", "source": "package.json" },
+    { "fact": "project.stack:vite", "source": "package.json" },
+    { "fact": "dark palette tokens", "source": "src/renderer/src/styles.css" }
+  ],
+  "generatedAt": "2026-10-14T20:35:39.361Z"
+}

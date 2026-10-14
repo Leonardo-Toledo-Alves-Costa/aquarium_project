@@ -45,3 +45,26 @@ export function withBitrateHints(sdp: string, hints: BitrateHints): string {
     })
     .join('\r\n')
 }
+
+/**
+ * O Opus do WebRTC vem afinado para voz: mono e ~32 kbps. Para som de jogo, vídeo e música,
+ * pede estéreo a 128 kbps. Aplicado na descrição recebida, vale para o que nós enviamos.
+ */
+export function withMusicAudio(sdp: string): string {
+  const opus = /^a=rtpmap:(\d+) opus\/48000\/2\r?$/m.exec(sdp)?.[1]
+  if (!opus) return sdp
+  const params = 'stereo=1;sprop-stereo=1;maxaveragebitrate=128000'
+  const lines = sdp.split('\r\n')
+  const fmtpIndex = lines.findIndex((l) => l.startsWith(`a=fmtp:${opus} `))
+  if (fmtpIndex === -1) {
+    const rtpmapIndex = lines.findIndex((l) => l.startsWith(`a=rtpmap:${opus} `))
+    lines.splice(rtpmapIndex + 1, 0, `a=fmtp:${opus} ${params}`)
+  } else {
+    const kept = lines[fmtpIndex]
+      .slice(`a=fmtp:${opus} `.length)
+      .split(';')
+      .filter((p) => !/^(stereo|sprop-stereo|maxaveragebitrate)=/.test(p))
+    lines[fmtpIndex] = `a=fmtp:${opus} ${[...kept, params].join(';')}`
+  }
+  return lines.join('\r\n')
+}

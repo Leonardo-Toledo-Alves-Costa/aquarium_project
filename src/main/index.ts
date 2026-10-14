@@ -1,6 +1,8 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, safeStorage, session } from 'electron'
+import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { IPC, type CaptureSource } from '../shared/ipc'
+import { registerAudio } from './audio'
 
 // Permissões que a interface pode usar. Todo o resto é negado.
 const ALLOWED_PERMISSIONS = new Set(['display-capture', 'media', 'clipboard-sanitized-write', 'fullscreen'])
@@ -67,11 +69,34 @@ function registerCapture(): void {
         callback({})
         return
       }
-      // 'loopback' captura o áudio do sistema; o Electron só suporta isso no Windows.
-      callback(process.platform === 'win32' ? { video: source, audio: 'loopback' } : { video: source })
+      // Só vídeo. O áudio do sistema inteiro ('loopback') levaria junto o Discord e o próprio
+      // Aquarium; o áudio da transmissão vem do aquarium-audio.exe, por programa.
+      callback({ video: source })
     },
     { useSystemPicker: false }
   )
+}
+
+function registerGroupCode(): void {
+  const file = (): string => join(app.getPath('userData'), 'group-code.bin')
+
+  ipcMain.handle(IPC.loadGroupCode, async (): Promise<string | null> => {
+    try {
+      return safeStorage.decryptString(await readFile(file()))
+    } catch {
+      return null
+    }
+  })
+
+  ipcMain.handle(IPC.saveGroupCode, async (_event, code: unknown) => {
+    if (code === null) {
+      await rm(file(), { force: true })
+      return
+    }
+    if (typeof code !== 'string' || code.length > 64) throw new Error('Código do grupo inválido')
+    if (!safeStorage.isEncryptionAvailable()) throw new Error('O sistema não oferece armazenamento cifrado')
+    await writeFile(file(), safeStorage.encryptString(code))
+  })
 }
 
 app.whenReady().then(() => {
@@ -81,6 +106,8 @@ app.whenReady().then(() => {
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission))
 
   registerCapture()
+  registerGroupCode()
+  registerAudio()
   createWindow()
 
   app.on('activate', () => {

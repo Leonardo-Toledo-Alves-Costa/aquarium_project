@@ -1,0 +1,12 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "aquarium",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "GROUPS", "class_name": "GroupRoom" }]
+  },
+  // O plano grátis só aceita Durable Objects com armazenamento SQLite.
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["GroupRoom"] }]
+}

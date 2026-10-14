@@ -3,3 +3,7 @@ out/
 dist/
 *.log
 .DS_Store
+native/bin/
+native/obj/
+server/node_modules/
+server/.wrangler/
