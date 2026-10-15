@@ -12,6 +12,7 @@ export type LayoutMode = 'lado' | 'foco'
 export interface AppSettings {
   name: string
   peerId: string
+  /** Vazio = servidor padrão desta versão (assim, mudar o padrão vale para todo mundo). */
   serverUrl: string
   presetId: PresetId
   priority: Priority
@@ -27,7 +28,12 @@ export interface AppSettings {
   volumes: Record<string, number>
 }
 
-export const DEFAULT_SERVER: string = import.meta.env.VITE_AQUARIUM_SERVER ?? 'ws://127.0.0.1:8787'
+// .env.development aponta para o servidor local; .env.production, para a Cloudflare.
+export const DEFAULT_SERVER: string = import.meta.env.VITE_AQUARIUM_SERVER ?? 'wss://aquarium.miguelzu1243.workers.dev'
+
+export function serverUrlOf(s: AppSettings): string {
+  return s.serverUrl.trim() || DEFAULT_SERVER
+}
 
 /**
  * Nunca entram no áudio da transmissão, para não dar retorno.
@@ -46,7 +52,7 @@ function load(): AppSettings {
   const defaults: AppSettings = {
     name: '',
     peerId: randomId(),
-    serverUrl: DEFAULT_SERVER,
+    serverUrl: '',
     presetId: 'jogo',
     priority: PRESETS.jogo.defaultPriority,
     codec: 'auto',

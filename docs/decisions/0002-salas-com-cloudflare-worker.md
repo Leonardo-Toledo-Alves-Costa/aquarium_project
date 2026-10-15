@@ -1,7 +1,7 @@
 # 0002 · Salas com um servidor de sinalização no Cloudflare Workers
 
 - **Data:** 2026-10-14
-- **Situação:** aceita (desenvolvida e testada localmente; falta publicar)
+- **Situação:** aceita e publicada em `https://aquarium.miguelzu1243.workers.dev` (2026-10-14; os 16 testes do servidor passaram também em produção)
 
 ## Contexto
 

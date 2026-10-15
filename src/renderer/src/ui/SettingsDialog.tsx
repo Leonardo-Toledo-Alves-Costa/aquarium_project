@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { CODECS, PRESETS, PRIORITIES, type CodecChoice, type PresetId, type Priority } from '../rtc/presets'
-import { DEFAULT_SERVER, updateSettings, useSettings, type AudioMode } from '../settings'
+import { DEFAULT_SERVER, serverUrlOf, updateSettings, useSettings, type AudioMode } from '../settings'
 import type { RoomClient } from '../signaling/rooms'
 import { copyText, useDismiss } from './hooks'
 import { IconClose, IconLock } from './icons'
@@ -300,22 +300,34 @@ function GroupSection({ client, groupCode, onLeaveGroup }: { client: RoomClient;
 
 function NetworkSection({ client, onManual }: { client: RoomClient; onManual: () => void }): React.JSX.Element {
   const settings = useSettings()
-  const [server, setServer] = useState(settings.serverUrl)
+  const [server, setServer] = useState(serverUrlOf(settings))
   const valid = /^wss?:\/\/[^\s]+$/.test(server.trim())
+  const current = serverUrlOf(settings)
   return (
     <div className="settings-section">
       <div className="field">
         <label htmlFor="st-server">Servidor de salas</label>
         <input id="st-server" className="mono" value={server} onChange={(e) => setServer(e.target.value)} />
         <span className="field-hint">
-          Situação: {client.status}. Padrão: <code>{DEFAULT_SERVER}</code>
+          Situação: {client.status}. Padrão desta versão: <code>{DEFAULT_SERVER}</code>
         </span>
       </div>
       <div className="choice-row">
-        <button className="btn primary" disabled={!valid || server.trim() === settings.serverUrl} onClick={() => updateSettings({ serverUrl: server.trim() })}>
+        <button
+          className="btn primary"
+          disabled={!valid || server.trim() === current}
+          onClick={() => updateSettings({ serverUrl: server.trim() === DEFAULT_SERVER ? '' : server.trim() })}
+        >
           Salvar servidor
         </button>
-        <button className="btn ghost" onClick={() => setServer(DEFAULT_SERVER)}>
+        <button
+          className="btn ghost"
+          disabled={!settings.serverUrl}
+          onClick={() => {
+            setServer(DEFAULT_SERVER)
+            updateSettings({ serverUrl: '' })
+          }}
+        >
           Voltar ao padrão
         </button>
       </div>

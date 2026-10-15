@@ -47,13 +47,7 @@ npm run dist:win
 
 Gera `dist/Aquarium-<versão>.exe`, portátil (não precisa instalar), já com o módulo de áudio. O Windows mostra o aviso do SmartScreen porque o executável não é assinado: "Mais informações" → "Executar assim mesmo".
 
-O endereço do servidor vem de `VITE_AQUARIUM_SERVER` na hora do build (padrão: o servidor local). Depois de publicar o servidor (veja [server/README.md](server/README.md)), gere o executável com:
-
-```sh
-VITE_AQUARIUM_SERVER=wss://aquarium.<sua-conta>.workers.dev npm run dist:win
-```
-
-Cada pessoa também pode trocar o servidor em Configurações → Rede e diagnóstico.
+O endereço do servidor vem de `VITE_AQUARIUM_SERVER`: `.env.development` aponta para o servidor local (`npm run dev`) e `.env.production` para o servidor publicado, `wss://aquarium.miguelzu1243.workers.dev` (veja [server/README.md](server/README.md)). Cada pessoa também pode trocar o servidor em Configurações → Rede e diagnóstico.
 
 ## Como usar
 

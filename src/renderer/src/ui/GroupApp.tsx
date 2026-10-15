@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { deriveGroupKeys } from '../group/group-code'
 import { RoomSession } from '../rtc/room-session'
-import { getSettings, sessionSettings, useSettings } from '../settings'
+import { getSettings, serverUrlOf, sessionSettings, useSettings } from '../settings'
 import { RoomClient } from '../signaling/rooms'
 import { Palco } from './Palco'
 
@@ -24,7 +24,7 @@ export function GroupApp({
     deriveGroupKeys(code).then((keys) => {
       if (cancelled) return
       const current = getSettings()
-      const client = new RoomClient({ serverUrl: current.serverUrl, keys, peerId: current.peerId, name: current.name })
+      const client = new RoomClient({ serverUrl: serverUrlOf(current), keys, peerId: current.peerId, name: current.name })
       const session = new RoomSession(client, sessionSettings(current))
       made = { client, session }
       setConn(made)
