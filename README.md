@@ -63,3 +63,7 @@ O endereço do servidor vem de `VITE_AQUARIUM_SERVER`: `.env.development` aponta
 - **Áudio por programa exige Windows 11** (ou Windows 10 build 20348+; versões anteriores podem funcionar, não testado). Sem ele, a transmissão vai sem áudio.
 - **Tela cheia exclusiva** pode aparecer preta. Use o modo "janela sem borda" nos jogos.
 - Quem tem o código do grupo entra. Para tirar alguém, é preciso criar um grupo novo.
+
+## Licença
+
+O código é aberto para ler, usar, estudar, modificar e redistribuir de graça, mas **a venda é proibida**, inclusive de versões modificadas. Por isso o Aquarium não é "open source" no sentido da OSI. Versões modificadas precisam usar outro nome e outro servidor de salas. O software vem sem garantia, e quem transmite responde pelo que aparece na própria tela. Veja os termos completos em [LICENSE.md](LICENSE.md).

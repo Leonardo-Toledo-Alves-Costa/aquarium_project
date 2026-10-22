@@ -16,3 +16,6 @@ server/.dev.vars
 *.p12
 *.pem
 *.key
+
+# Rascunhos de planos dos agentes (ficam só na máquina).
+docs/plans/
