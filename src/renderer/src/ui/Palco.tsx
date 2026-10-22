@@ -77,6 +77,7 @@ export function Palco({
   const busy = session.local !== null || [...session.links.values()].some((l) => l.iWatch)
   useEffect(() => {
     void window.aquarium.setBusy(busy)
+    return () => void window.aquarium.setBusy(false)
   }, [busy])
 
   const join = (id: string | null): void => {
