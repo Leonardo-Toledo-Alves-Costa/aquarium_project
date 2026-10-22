@@ -156,7 +156,9 @@ export class GroupRoom extends DurableObject<Env> {
       await this.ctx.storage.put('authHash', hash)
       await this.saveRooms(DEFAULT_ROOMS.map((roomName) => ({ id: crypto.randomUUID().slice(0, 8), name: roomName })))
     } else if (!crypto.subtle.timingSafeEqual(encoder.encode(stored), encoder.encode(hash))) {
-      const failure = this.failures.get(connection.ip) ?? { count: 0, since: Date.now() }
+      const previous = this.failures.get(connection.ip)
+      // Passados os 10 minutos, a contagem recomeça (senão o bloqueio só valeria uma vez).
+      const failure = previous && Date.now() - previous.since < 10 * 60_000 ? previous : { count: 0, since: Date.now() }
       failure.count++
       this.failures.set(connection.ip, failure)
       return this.reject(ws, 'auth', 'Código do grupo incorreto', CLOSE.auth)

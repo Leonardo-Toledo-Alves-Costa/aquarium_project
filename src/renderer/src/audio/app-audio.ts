@@ -15,7 +15,8 @@ export interface AppAudio {
 function nextAudioPort(): Promise<MessagePort> {
   return new Promise((resolve) => {
     const onMessage = (event: MessageEvent): void => {
-      if (event.data?.type === 'aquarium-audio-port' && event.ports[0]) {
+      // Só a própria página (o preload) entrega a porta.
+      if (event.source === window && event.data?.type === 'aquarium-audio-port' && event.ports[0]) {
         window.removeEventListener('message', onMessage)
         resolve(event.ports[0])
       }

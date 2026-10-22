@@ -7,3 +7,12 @@ native/bin/
 native/obj/
 server/node_modules/
 server/.wrangler/
+
+# Segredos locais: nunca vão para o repositório público.
+.env.local
+.env.*.local
+server/.dev.vars
+*.pfx
+*.p12
+*.pem
+*.key
