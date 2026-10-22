@@ -1,4 +1,5 @@
-appId: com.aquarium.app
+# Não mudar depois do primeiro instalador: o Windows identifica a instalação por ele.
+appId: io.github.leonardo-toledo-alves-costa.aquarium
 productName: Aquarium
 directories:
   output: dist
