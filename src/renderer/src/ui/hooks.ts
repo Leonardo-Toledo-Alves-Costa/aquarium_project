@@ -1,10 +1,26 @@
 import { useEffect, useReducer, useRef, useState } from 'react'
+import type { UpdateState } from '../../../shared/ipc'
 import type { StatsSample, StatsSampler } from '../rtc/stats'
 
 /** Re-renderiza quando o objeto avisa que mudou (RoomClient, RoomSession). */
 export function useSubscribe(target: { subscribe(listener: () => void): () => void } | null): void {
   const [, rerender] = useReducer((n: number) => n + 1, 0)
   useEffect(() => target?.subscribe(rerender), [target])
+}
+
+/** Atualização pronta para instalar (já baixada e com a assinatura conferida). */
+export function useUpdateState(): UpdateState {
+  const [state, setState] = useState<UpdateState>({ ready: false })
+  useEffect(() => {
+    let active = true
+    window.aquarium.getUpdateState().then((s) => active && setState(s))
+    const stop = window.aquarium.onUpdateState(setState)
+    return () => {
+      active = false
+      stop()
+    }
+  }, [])
+  return state
 }
 
 export function useStats(sampler: StatsSampler | undefined, active: boolean): StatsSample | null {

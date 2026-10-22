@@ -3,6 +3,12 @@
 // O conteúdo dos sinais (SDP, endereços) vai cifrado com a chave do grupo.
 
 export const PROTOCOL_VERSION = 1
+/**
+ * Menor versão que o servidor ainda aceita. Ao mudar o protocolo, o servidor sobe PROTOCOL_VERSION
+ * e mantém esta na anterior até todos atualizarem, para que ninguém fique trancado do lado de fora
+ * enquanto a atualização automática chega. Publique o servidor antes do app.
+ */
+export const MIN_PROTOCOL_VERSION = 1
 
 /** Identificador do grupo na URL: 22 caracteres base64url (128 bits de um hash do código). */
 export const GROUP_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/

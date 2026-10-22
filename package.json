@@ -1,6 +1,6 @@
 {
   "name": "aquarium",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Compartilhamento de tela P2P para uso interno",
   "private": true,
   "author": "Miguel Luiz",
@@ -10,11 +10,15 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit --composite false -p tsconfig.node.json && tsc --noEmit --composite false -p tsconfig.web.json",
-    "dist:win": "npm run build:native && electron-vite build && electron-builder --win portable",
+    "dist:win": "npm run build:native && npm run notices && electron-vite build && electron-builder --win nsis --publish never",
     "build:native": "cmd /c native\\build.cmd",
-    "server": "npm --prefix server run dev"
+    "server": "npm --prefix server run dev",
+    "notices": "node scripts/notices.mjs",
+    "release:sign": "node scripts/release.mjs sign",
+    "release:publish": "node scripts/release.mjs publish"
   },
   "devDependencies": {
+    "@electron/fuses": "2.1.3",
     "@fontsource-variable/bricolage-grotesque": "^5.3.0",
     "@fontsource-variable/figtree": "^5.3.0",
     "@types/node": "^24.19.2",
@@ -28,5 +32,8 @@
     "react-dom": "^19.3.1",
     "typescript": "~5.9",
     "vite": "^7.3.7"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9"
   }
 }

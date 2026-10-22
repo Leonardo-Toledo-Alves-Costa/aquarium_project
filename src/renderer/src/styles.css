@@ -151,6 +151,9 @@ code,
   border: 1px solid var(--line-2);
   background: transparent;
 }
+.icon-btn.update-ready {
+  color: var(--ok);
+}
 .link {
   border: 0;
   background: transparent;

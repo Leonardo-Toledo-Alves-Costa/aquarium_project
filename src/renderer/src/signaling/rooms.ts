@@ -143,6 +143,8 @@ export class RoomClient {
       if (this.closed || this.ws !== ws) return
       if (event.code === CLOSE.auth || event.code === CLOSE.version || event.code === CLOSE.replaced) {
         this.status = 'recusado'
+        // Versão recusada pelo servidor: procura a atualização agora, sem esperar a próxima verificação.
+        if (event.code === CLOSE.version) void window.aquarium.checkForUpdates()
         if (event.code === CLOSE.replaced) this.error = 'Você abriu o Aquarium em outro lugar com este mesmo aparelho.'
         this.emit()
         return

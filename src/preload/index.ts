@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import { IPC, type AquariumApi } from '../shared/ipc'
+import { IPC, type AquariumApi, type UpdateState } from '../shared/ipc'
 
 const api: AquariumApi = {
   listSources: () => ipcRenderer.invoke(IPC.listSources),
@@ -9,6 +9,15 @@ const api: AquariumApi = {
   stopAudio: () => ipcRenderer.invoke(IPC.stopAudio),
   loadGroupCode: () => ipcRenderer.invoke(IPC.loadGroupCode),
   saveGroupCode: (code) => ipcRenderer.invoke(IPC.saveGroupCode, code),
+  getUpdateState: () => ipcRenderer.invoke(IPC.getUpdateState),
+  onUpdateState: (listener) => {
+    const handler = (_event: Electron.IpcRendererEvent, state: UpdateState): void => listener(state)
+    ipcRenderer.on(IPC.updateState, handler)
+    return () => ipcRenderer.removeListener(IPC.updateState, handler)
+  },
+  installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
+  checkForUpdates: () => ipcRenderer.invoke(IPC.checkForUpdates),
+  setBusy: (busy) => ipcRenderer.invoke(IPC.setBusy, busy),
   platform: process.platform
 }
 

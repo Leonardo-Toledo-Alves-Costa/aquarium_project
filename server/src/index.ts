@@ -7,6 +7,7 @@ import {
   DEFAULT_ROOMS,
   GROUP_ID_PATTERN,
   LIMITS,
+  MIN_PROTOCOL_VERSION,
   PEER_ID_PATTERN,
   PROTOCOL_VERSION,
   type ClientMessage,
@@ -141,7 +142,7 @@ export class GroupRoom extends DurableObject<Env> {
   }
 
   private async hello(ws: WebSocket, connection: Connection, message: Extract<ClientMessage, { t: 'hello' }>): Promise<void> {
-    if (message.v !== PROTOCOL_VERSION) {
+    if (typeof message.v !== 'number' || message.v < MIN_PROTOCOL_VERSION || message.v > PROTOCOL_VERSION) {
       return this.reject(ws, 'version', 'Versão do Aquarium diferente da do servidor. Atualize o app.', CLOSE.version)
     }
     const name = cleanText(message.name, LIMITS.nameLength)

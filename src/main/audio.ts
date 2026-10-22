@@ -50,6 +50,20 @@ class AudioCapture {
     this.port = null
   }
 
+  /** Para e espera o processo sair: o instalador não substitui um .exe aberto. */
+  stopAndWait(): Promise<void> {
+    const child = this.child
+    this.stop()
+    if (!child || child.exitCode !== null || child.signalCode !== null) return Promise.resolve()
+    return new Promise((resolve) => {
+      const timer = setTimeout(resolve, 2000)
+      child.once('exit', () => {
+        clearTimeout(timer)
+        resolve()
+      })
+    })
+  }
+
   private spawn(options: AudioOptions): void {
     if (options.mode === 'none' || process.platform !== 'win32') return
     const exe = helperPath()
@@ -87,8 +101,13 @@ class AudioCapture {
   }
 }
 
+const capture = new AudioCapture()
+
+export function stopAudioCapture(): Promise<void> {
+  return capture.stopAndWait()
+}
+
 export function registerAudio(): void {
-  const capture = new AudioCapture()
   ipcMain.handle(IPC.startAudio, (event, options: unknown) => capture.start(event.sender, validate(options)))
   ipcMain.handle(IPC.updateAudio, (_event, options: unknown) => capture.update(validate(options)))
   ipcMain.handle(IPC.stopAudio, () => capture.stop())

@@ -15,6 +15,9 @@ export interface AudioOptions {
   blocked: string[]
 }
 
+/** Atualização baixada e com a assinatura conferida, esperando o app reiniciar. */
+export type UpdateState = { ready: false } | { ready: true; version: string }
+
 export interface AquariumApi {
   listSources(): Promise<CaptureSource[]>
   selectSource(id: string): Promise<void>
@@ -29,6 +32,14 @@ export interface AquariumApi {
   /** Código do grupo, guardado cifrado pelo sistema (DPAPI no Windows). */
   loadGroupCode(): Promise<string | null>
   saveGroupCode(code: string | null): Promise<void>
+  getUpdateState(): Promise<UpdateState>
+  /** Avisa quando o estado da atualização muda; devolve a função que para de avisar. */
+  onUpdateState(listener: (state: UpdateState) => void): () => void
+  /** Reinicia para instalar (pede confirmação se houver transmissão em andamento). */
+  installUpdate(): Promise<void>
+  checkForUpdates(): Promise<void>
+  /** Transmitindo ou assistindo: o download da atualização espera, e reiniciar pede confirmação. */
+  setBusy(busy: boolean): Promise<void>
   platform: string
 }
 
@@ -40,5 +51,10 @@ export const IPC = {
   startAudio: 'audio:start',
   updateAudio: 'audio:update',
   stopAudio: 'audio:stop',
-  audioPort: 'audio:port'
+  audioPort: 'audio:port',
+  getUpdateState: 'updater:get-state',
+  updateState: 'updater:state',
+  installUpdate: 'updater:install',
+  checkForUpdates: 'updater:check',
+  setBusy: 'updater:busy'
 } as const

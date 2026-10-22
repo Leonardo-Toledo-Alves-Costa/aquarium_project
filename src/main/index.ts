@@ -3,6 +3,7 @@ import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { IPC, type CaptureSource } from '../shared/ipc'
 import { registerAudio } from './audio'
+import { registerUpdater } from './updater'
 
 // Permissões que a interface pode usar. Todo o resto é negado.
 const ALLOWED_PERMISSIONS = new Set(['display-capture', 'media', 'clipboard-sanitized-write', 'fullscreen'])
@@ -108,6 +109,7 @@ app.whenReady().then(() => {
   registerCapture()
   registerGroupCode()
   registerAudio()
+  registerUpdater()
   createWindow()
 
   app.on('activate', () => {

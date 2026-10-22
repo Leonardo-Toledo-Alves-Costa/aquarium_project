@@ -8,9 +8,10 @@ import { updateSettings, useSettings, type AudioMode } from '../settings'
 import type { RoomClient } from '../signaling/rooms'
 import { Avatar } from './Avatar'
 import { ContextMenu, MenuItem, MenuSeparator, MenuTitle, type MenuPosition } from './ContextMenu'
-import { copyText, useDismiss, useStats, useStreamAudio, useSubscribe } from './hooks'
+import { copyText, useDismiss, useStats, useStreamAudio, useSubscribe, useUpdateState } from './hooks'
 import {
   IconChevronDown,
+  IconDownload,
   IconEye,
   IconFocus,
   IconGear,
@@ -71,6 +72,12 @@ export function Palco({
   const roomMembers = client.state.members.filter((m) => roomId !== null && m.roomId === roomId)
   const tiles = buildTiles(session, roomMembers, client.peerId)
   const focused = tiles.find((t) => t.id === focusId) ?? tiles[0]
+
+  // Transmitindo ou assistindo: a atualização espera para baixar, e reiniciar pede confirmação.
+  const busy = session.local !== null || [...session.links.values()].some((l) => l.iWatch)
+  useEffect(() => {
+    void window.aquarium.setBusy(busy)
+  }, [busy])
 
   const join = (id: string | null): void => {
     if (session.local && id !== roomId) session.stopStreaming()
@@ -285,6 +292,7 @@ function TopBar({
   const ref = useRef<HTMLDivElement>(null)
   useDismiss(ref, () => setOpen(false), open)
   const status = client.status
+  const update = useUpdateState()
 
   return (
     <header className="topbar">
@@ -353,6 +361,16 @@ function TopBar({
       <button className="icon-btn" aria-label="Pessoas do grupo" onClick={onPeople}>
         <IconUsers size={18} />
       </button>
+      {update.ready && (
+        <button
+          className="icon-btn update-ready"
+          aria-label={`Atualização ${update.version} pronta. Reiniciar para instalar`}
+          title={`Versão ${update.version} pronta: clique para reiniciar e atualizar`}
+          onClick={() => void window.aquarium.installUpdate()}
+        >
+          <IconDownload size={18} />
+        </button>
+      )}
     </header>
   )
 }

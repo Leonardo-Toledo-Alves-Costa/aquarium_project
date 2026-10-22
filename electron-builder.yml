@@ -6,12 +6,34 @@ directories:
   buildResources: build
 files:
   - out/**/*
-# Módulo de captura de áudio por programa (native/build.cmd gera o .exe).
+# Módulo de captura de áudio por programa (native/build.cmd gera o .exe), a licença e os avisos de terceiros.
 extraResources:
   - from: native/bin/aquarium-audio.exe
     to: aquarium-audio.exe
+  - from: LICENSE.md
+    to: LICENSE.md
+  - from: THIRD-PARTY-NOTICES.txt
+    to: THIRD-PARTY-NOTICES.txt
 asar: true
 npmRebuild: false
 win:
-  target: portable
-  artifactName: Aquarium-${version}.exe
+  target: nsis
+  # Sem espaços: o GitHub troca espaços nos nomes dos arquivos e o latest.yml deixaria de achar o instalador.
+  artifactName: Aquarium-Setup-${version}.${ext}
+# Instala na pasta do usuário, sem pedir administrador; atualizar fica silencioso.
+nsis:
+  oneClick: true
+  perMachine: false
+  runAfterFinish: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  deleteAppDataOnUninstall: false
+  include: build/installer.nsh
+# As releases são publicadas por scripts/release.mjs, que assina antes de subir.
+publish:
+  provider: github
+  owner: Leonardo-Toledo-Alves-Costa
+  repo: aquarium_project
+  releaseType: release
+# Travas do Electron (veja build/after-pack.mjs).
+afterPack: build/after-pack.mjs

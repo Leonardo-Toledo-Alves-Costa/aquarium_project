@@ -86,6 +86,12 @@ export const IconUsers = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
+export const IconDownload = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M12 4v11M7 10l5 5 5-5M5 20h14" />
+  </Svg>
+)
+
 export const IconEye = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
     <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z" />

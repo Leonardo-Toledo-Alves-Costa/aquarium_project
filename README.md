@@ -39,13 +39,31 @@ npm run dev              # o app (em outro terminal)
 
 Na primeira execução o Electron baixa o próprio binário (~100 MB).
 
-## Gerar o executável para Windows
+## Gerar o instalador para Windows
 
 ```sh
 npm run dist:win
 ```
 
-Gera `dist/Aquarium-<versão>.exe`, portátil (não precisa instalar), já com o módulo de áudio. O Windows mostra o aviso do SmartScreen porque o executável não é assinado: "Mais informações" → "Executar assim mesmo".
+Gera `dist/Aquarium-Setup-<versão>.exe`, que instala na pasta do usuário (sem pedir administrador), já com o módulo de áudio, a licença e os avisos de terceiros. Na primeira instalação o Windows mostra o aviso do SmartScreen porque o instalador não tem certificado da Microsoft: "Mais informações" → "Executar assim mesmo". As atualizações seguintes chegam sozinhas.
+
+## Publicar uma atualização
+
+O app procura versões novas no GitHub Releases deste repositório ao abrir e a cada 4 horas, baixa em segundo plano (esperando quem estiver transmitindo ou assistindo) e mostra um ícone verde na barra do topo. Clicar no ícone reinicia já atualizado; quem não clicar recebe a versão nova ao fechar o app.
+
+Cada atualização é assinada com uma chave Ed25519 que fica só no PC de quem publica (`~/.aquarium/update-signing-key.pem`). O app recusa qualquer instalador sem essa assinatura, mesmo que venha do GitHub. Sem a chave não dá para publicar uma atualização que o app aceite, então guarde uma cópia dela em lugar seguro.
+
+1. Suba a versão em `package.json`, faça o commit e o push.
+2. Se o protocolo do servidor mudou, publique o servidor **antes** (veja `MIN_PROTOCOL_VERSION` em `src/shared/rooms-protocol.ts`).
+3. Gere, assine e publique:
+
+```sh
+npm run dist:win
+npm run release:sign
+npm run release:publish   # cria a release v<versão> no GitHub (precisa do gh logado)
+```
+
+Não apague os arquivos de releases antigas: o app usa o `.blockmap` da versão instalada para baixar só o que mudou.
 
 O endereço do servidor vem de `VITE_AQUARIUM_SERVER`: `.env.development` aponta para o servidor local (`npm run dev`) e `.env.production` para o servidor publicado, `wss://aquarium.miguelzu1243.workers.dev` (veja [server/README.md](server/README.md)). Cada pessoa também pode trocar o servidor em Configurações → Rede e diagnóstico.
 
