@@ -60,11 +60,12 @@ export function Palco({
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [peopleOpen, setPeopleOpen] = useState(false)
   const [creatingRoom, setCreatingRoom] = useState(false)
-  const [menu, setMenu] = useState<{ tileId: string; at: MenuPosition } | null>(null)
+  const [menu, setMenu] = useState<{ tileId: string; at: MenuPosition; anchor?: HTMLElement } | null>(null)
   const [focusId, setFocusId] = useState<string | null>(null)
   const [masterMuted, setMasterMuted] = useState(false)
   const [mutedPeers, setMutedPeers] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
+  const peopleButton = useRef<HTMLButtonElement>(null)
 
   const me = client.me
   const roomId = me?.roomId ?? null
@@ -114,7 +115,9 @@ export function Palco({
     }
   }
 
-  const openMenu = (tileId: string, at: MenuPosition): void => setMenu({ tileId, at })
+  // Clicar de novo no botão que abriu o menu fecha o menu.
+  const openMenu = (tileId: string, at: MenuPosition, anchor?: HTMLElement): void =>
+    setMenu((current) => (anchor && current?.anchor === anchor ? null : { tileId, at, anchor }))
   const menuTile = menu ? tiles.find((t) => t.id === menu.tileId) : undefined
 
   return (
@@ -125,6 +128,7 @@ export function Palco({
         roomMembers={roomMembers}
         onJoin={join}
         onCreateRoom={() => setCreatingRoom(true)}
+        peopleButton={peopleButton}
         onPeople={() => setPeopleOpen((v) => !v)}
       />
 
@@ -175,17 +179,17 @@ export function Palco({
         streaming={!!session.local}
         masterMuted={masterMuted}
         layout={settings.layout}
-        onStream={(at) => (session.local ? openMenu('me', at) : setPicker(true))}
+        onStream={(at, anchor) => (session.local ? openMenu('me', at, anchor) : setPicker(true))}
         onToggleMute={() => setMasterMuted((v) => !v)}
         onToggleLayout={() => updateSettings({ layout: settings.layout === 'lado' ? 'foco' : 'lado' })}
         onSettings={() => setSettingsOpen(true)}
         onLeave={() => join(null)}
       />
 
-      {peopleOpen && <PeopleDrawer client={client} onClose={() => setPeopleOpen(false)} />}
+      {peopleOpen && <PeopleDrawer client={client} toggle={peopleButton} onClose={() => setPeopleOpen(false)} />}
 
       {menu && menuTile && (
-        <ContextMenu at={menu.at} label="Opções da transmissão" onClose={() => setMenu(null)}>
+        <ContextMenu at={menu.at} label="Opções da transmissão" toggle={menu.anchor} onClose={() => setMenu(null)}>
           {menuTile.kind === 'own' ? (
             <OwnMenu
               session={session}
@@ -280,6 +284,7 @@ function TopBar({
   roomMembers,
   onJoin,
   onCreateRoom,
+  peopleButton,
   onPeople
 }: {
   client: RoomClient
@@ -287,6 +292,7 @@ function TopBar({
   roomMembers: MemberInfo[]
   onJoin: (id: string | null) => void
   onCreateRoom: () => void
+  peopleButton: React.RefObject<HTMLButtonElement | null>
   onPeople: () => void
 }): React.JSX.Element {
   const [open, setOpen] = useState(false)
@@ -359,7 +365,7 @@ function TopBar({
         <IconSignal size={14} />
         {status === 'conectado' ? 'conectado' : status === 'recusado' ? 'recusado' : status === 'reconectando' ? 'reconectando…' : 'conectando…'}
       </span>
-      <button className="icon-btn" aria-label="Pessoas do grupo" onClick={onPeople}>
+      <button ref={peopleButton} className="icon-btn" aria-label="Pessoas do grupo" onClick={onPeople}>
         <IconUsers size={18} />
       </button>
       {update.ready && (
@@ -493,7 +499,7 @@ interface TileViewProps {
   masterMuted: boolean
   mutedPeers: Set<string>
   volumes: Record<string, number>
-  onMenu: (tileId: string, at: MenuPosition) => void
+  onMenu: (tileId: string, at: MenuPosition, anchor?: HTMLElement) => void
   onFocus: (tileId: string) => void
 }
 
@@ -565,7 +571,7 @@ function TileView({ tile, big, session, masterMuted, mutedPeers, volumes, onMenu
           aria-label="Opções da transmissão"
           onClick={(e) => {
             const r = e.currentTarget.getBoundingClientRect()
-            onMenu(tile.id, { x: r.left, y: r.bottom + 4 })
+            onMenu(tile.id, { x: r.left, y: r.bottom + 4 }, e.currentTarget)
           }}
         >
           <IconMore size={18} />
@@ -782,7 +788,7 @@ function Dock({
   streaming: boolean
   masterMuted: boolean
   layout: 'lado' | 'foco'
-  onStream: (at: MenuPosition) => void
+  onStream: (at: MenuPosition, anchor: HTMLElement) => void
   onToggleMute: () => void
   onToggleLayout: () => void
   onSettings: () => void
@@ -790,6 +796,7 @@ function Dock({
 }): React.JSX.Element {
   const idle = useIdle(3000)
   const [quality, setQuality] = useState(false)
+  const qualityButton = useRef<HTMLButtonElement>(null)
 
   return (
     <div className={`dock ${idle && inRoom && !quality ? 'idle' : ''}`} role="toolbar" aria-label="Controles da sala">
@@ -798,7 +805,7 @@ function Dock({
         disabled={!inRoom}
         onClick={(e) => {
           const r = e.currentTarget.getBoundingClientRect()
-          onStream({ x: r.left, y: r.top - 8 - 420 })
+          onStream({ x: r.left, y: r.top - 8 - 420 }, e.currentTarget)
         }}
       >
         <IconScreen />
@@ -809,11 +816,11 @@ function Dock({
         {masterMuted ? 'Sem som' : 'Som'}
       </button>
       <div className="dock-anchor">
-        <button className="dock-btn" aria-expanded={quality} onClick={() => setQuality((v) => !v)}>
+        <button ref={qualityButton} className="dock-btn" aria-expanded={quality} onClick={() => setQuality((v) => !v)}>
           <IconSliders />
           Qualidade
         </button>
-        {quality && <QualityPopover onClose={() => setQuality(false)} />}
+        {quality && <QualityPopover toggle={qualityButton} onClose={() => setQuality(false)} />}
       </div>
       <button className="dock-btn" disabled={!inRoom} onClick={onToggleLayout}>
         {layout === 'lado' ? <IconSideBySide /> : <IconFocus />}
@@ -831,11 +838,17 @@ function Dock({
   )
 }
 
-function QualityPopover({ onClose }: { onClose: () => void }): React.JSX.Element {
+function QualityPopover({
+  toggle,
+  onClose
+}: {
+  toggle: React.RefObject<HTMLButtonElement | null>
+  onClose: () => void
+}): React.JSX.Element {
   const settings = useSettings()
   const ref = useRef<HTMLDivElement>(null)
   const close = useCallback(onClose, [onClose])
-  useDismiss(ref, close)
+  useDismiss(ref, close, true, toggle)
   return (
     <div ref={ref} className="popover" role="dialog" aria-label="Qualidade da transmissão">
       <div className="field">
@@ -905,9 +918,17 @@ export function BandwidthPicker(): React.JSX.Element {
 
 // ---------- pessoas ----------
 
-function PeopleDrawer({ client, onClose }: { client: RoomClient; onClose: () => void }): React.JSX.Element {
+function PeopleDrawer({
+  client,
+  toggle,
+  onClose
+}: {
+  client: RoomClient
+  toggle: React.RefObject<HTMLButtonElement | null>
+  onClose: () => void
+}): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  useDismiss(ref, onClose)
+  useDismiss(ref, onClose, true, toggle)
   const groups = [
     ...client.state.rooms.map((r) => ({ title: r.name, members: client.state.members.filter((m) => m.roomId === r.id) })),
     { title: 'Fora das salas', members: client.state.members.filter((m) => m.roomId === null) }

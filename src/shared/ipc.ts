@@ -24,11 +24,13 @@ export interface AquariumApi {
   /**
    * Começa a captura de áudio por programa. Os dados (PCM 16 bits, 48 kHz, estéreo) chegam
    * por um MessagePort entregue à página com window.postMessage({ type: 'aquarium-audio-port' }).
+   * Devolve o número desta captura: só ele atualiza ou para a captura, para que parar a antiga
+   * ao trocar de janela não derrube a nova.
    */
-  startAudio(options: AudioOptions): Promise<void>
+  startAudio(options: AudioOptions): Promise<number>
   /** Troca o modo sem trocar o canal (a trilha de áudio da transmissão continua a mesma). */
-  updateAudio(options: AudioOptions): Promise<void>
-  stopAudio(): Promise<void>
+  updateAudio(id: number, options: AudioOptions): Promise<void>
+  stopAudio(id: number): Promise<void>
   /** Código do grupo, guardado cifrado pelo sistema (DPAPI no Windows). */
   loadGroupCode(): Promise<string | null>
   saveGroupCode(code: string | null): Promise<void>

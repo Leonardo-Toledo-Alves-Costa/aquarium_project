@@ -6,21 +6,25 @@ export interface MenuPosition {
   y: number
 }
 
-/** Menu flutuante que abre onde foi clicado e não sai da janela. */
+/** Menu flutuante que abre onde foi clicado e não sai da janela. `toggle`: o botão que abriu o menu. */
 export function ContextMenu({
   at,
   label,
+  toggle,
   onClose,
   children
 }: {
   at: MenuPosition
   label: string
+  toggle?: HTMLElement
   onClose: () => void
   children: React.ReactNode
 }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
+  const toggleRef = useRef<HTMLElement | null>(null)
+  toggleRef.current = toggle ?? null
   const [pos, setPos] = useState(at)
-  useDismiss(ref, onClose)
+  useDismiss(ref, onClose, true, toggleRef)
 
   useLayoutEffect(() => {
     const el = ref.current

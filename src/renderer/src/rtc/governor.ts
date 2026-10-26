@@ -13,10 +13,14 @@ export interface NetworkSample {
   jitterMs?: number
 }
 
+/** Amostras de atraso guardadas: ~1 minuto, com uma leitura a cada ~2 s. */
+const RTT_WINDOW = 30
+
 export class BitrateGovernor {
   /** Teto atual em bits por segundo. */
   cap: number
-  private baseRtt = Infinity
+  /** Atrasos do último minuto: a base é o menor deles, e não o menor desde sempre. */
+  private rtts: number[] = []
   private stableTicks = 0
 
   constructor(
@@ -46,10 +50,16 @@ export class BitrateGovernor {
       return Math.abs(this.cap - before) > before * 0.05
     }
 
-    if (sample.rttMs !== undefined) this.baseRtt = Math.min(this.baseRtt, sample.rttMs)
-    const rttRise = sample.rttMs !== undefined && this.baseRtt !== Infinity ? sample.rttMs - this.baseRtt : 0
-    const congested =
-      rttRise > Math.max(40, this.baseRtt) || (sample.fractionLost ?? 0) > 0.05 || (sample.jitterMs ?? 0) > 60
+    // Leitura zerada (antes de a rota estabilizar) não vira base: com ela, qualquer rota
+    // de 45 ms pareceria congestionada para sempre e o teto nunca mais subiria.
+    const rtt = sample.rttMs !== undefined && sample.rttMs > 0 ? sample.rttMs : undefined
+    if (rtt !== undefined) {
+      this.rtts.push(rtt)
+      if (this.rtts.length > RTT_WINDOW) this.rtts.shift()
+    }
+    const baseRtt = Math.min(...this.rtts)
+    const rttRise = rtt !== undefined ? rtt - baseRtt : 0
+    const congested = rttRise > Math.max(40, baseRtt) || (sample.fractionLost ?? 0) > 0.05 || (sample.jitterMs ?? 0) > 60
 
     if (congested) {
       this.cap = Math.max(this.floor(), this.cap * 0.75)

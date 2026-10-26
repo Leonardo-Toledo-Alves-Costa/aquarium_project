@@ -26,6 +26,8 @@ const RETRY_DELAYS = [500, 1000, 2000, 5000, 10000]
 export class RoomClient {
   state: GroupState = { rooms: [], members: [] }
   status: ConnectionStatus = 'conectando'
+  /** Quantas vezes a conexão com o servidor foi aceita (sobe a cada reconexão). */
+  connections = 0
   /** Motivo de uma recusa (código errado, versão antiga) ou do último erro. */
   error: string | null = null
 
@@ -38,6 +40,10 @@ export class RoomClient {
   private closed = false
   private roomId: string | null = null
   private streaming: { active: boolean; label?: string } = { active: false }
+  /** Voltando para a sala depois de uma queda, até o servidor confirmar. */
+  private rejoining = false
+  /** Sinais são decifrados e entregues em fila, na ordem em que chegaram. */
+  private inbox: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: RoomClientOptions) {
     this.connect()
@@ -159,23 +165,28 @@ export class RoomClient {
   private handle(message: ServerMessage): void {
     switch (message.t) {
       case 'welcome':
+        this.connections++
         this.retry = 0
         this.status = 'conectado'
         this.error = null
-        this.state = message.state
+        this.rejoining = false
+        this.setState(message.state)
         // Volta para a sala e o estado em que estava (depois de uma queda, ou pedidos feitos antes de conectar).
         if (this.roomId !== null) {
           this.send({ t: 'join', roomId: this.roomId })
           if (this.streaming.active) this.send({ t: 'stream', ...this.streaming })
+          this.rejoining = true
+          this.setState(this.state)
         }
         this.emit()
         break
       case 'state':
-        this.state = message.state
+        this.setState(message.state)
         this.emit()
         break
       case 'signal':
-        this.decrypt(message.from, message.data).then((payload) => {
+        this.inbox = this.inbox.then(async () => {
+          const payload = await this.decrypt(message.from, message.data)
           if (payload === undefined) return
           for (const handler of this.signalHandlers) handler(message.from, payload)
         })
@@ -184,6 +195,25 @@ export class RoomClient {
         this.error = message.message
         this.emit()
         break
+    }
+  }
+
+  private setState(state: GroupState): void {
+    this.state = state
+    // A sala em que eu estava foi apagada: o servidor já me tirou dela; não tento voltar numa reconexão.
+    if (this.roomId !== null && !state.rooms.some((r) => r.id === this.roomId)) {
+      this.roomId = null
+      this.streaming = { active: false }
+      this.rejoining = false
+    }
+    if (!this.rejoining) return
+    const me = this.me
+    if (me?.roomId === this.roomId && me.streaming === this.streaming.active) {
+      this.rejoining = false
+    } else if (me) {
+      // Até o servidor confirmar, vale a sala de antes. Sem isso, a sessão veria "fora da sala"
+      // por um instante e fecharia as conexões e a própria transmissão.
+      Object.assign(me, { roomId: this.roomId, streaming: this.streaming.active, streamLabel: this.streaming.label })
     }
   }
 

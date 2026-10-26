@@ -25,23 +25,30 @@ function validate(options: unknown): AudioOptions {
 }
 
 class AudioCapture {
+  /** Número da captura atual; pedidos com outro número são de uma captura que já foi trocada. */
+  private id = 0
   private port: MessagePortMain | null = null
   private child: ChildProcess | null = null
   private leftover: Buffer = Buffer.alloc(0)
 
-  start(contents: WebContents, options: AudioOptions): void {
+  start(contents: WebContents, options: AudioOptions): number {
     this.stop()
     const { port1, port2 } = new MessageChannelMain()
     this.port = port1
     port1.start()
     contents.postMessage(IPC.audioPort, null, [port2])
     this.spawn(options)
+    return ++this.id
   }
 
-  update(options: AudioOptions): void {
-    if (!this.port) return
+  update(id: number, options: AudioOptions): void {
+    if (id !== this.id || !this.port) return
     this.kill()
     this.spawn(options)
+  }
+
+  stopIfCurrent(id: number): void {
+    if (id === this.id) this.stop()
   }
 
   stop(): void {
@@ -109,7 +116,7 @@ export function stopAudioCapture(): Promise<void> {
 
 export function registerAudio(): void {
   ipcMain.handle(IPC.startAudio, (event, options: unknown) => capture.start(event.sender, validate(options)))
-  ipcMain.handle(IPC.updateAudio, (_event, options: unknown) => capture.update(validate(options)))
-  ipcMain.handle(IPC.stopAudio, () => capture.stop())
+  ipcMain.handle(IPC.updateAudio, (_event, id: unknown, options: unknown) => capture.update(Number(id), validate(options)))
+  ipcMain.handle(IPC.stopAudio, (_event, id: unknown) => capture.stopIfCurrent(Number(id)))
   app.on('before-quit', () => capture.stop())
 }

@@ -14,12 +14,26 @@ export interface SessionSettings extends StreamSettings {
   bandwidth: BandwidthMode
 }
 
-type Signal =
+type Signal = (
   | { k: 'desc'; desc: RTCSessionDescriptionInit }
   | { k: 'ice'; candidate: RTCIceCandidateInit | null }
   | { k: 'watch'; on: boolean }
+  | { k: 'hello' }
+) & {
+  /** Conexão de quem envia (versões até a 0.4.0 não mandam). */
+  lid?: string
+  /** Conexão de quem recebe, como quem envia a conhece. */
+  to?: string
+}
+
+/** Depois que alguém para de transmitir, por quanto tempo volto a assistir sozinho se a pessoa voltar. */
+const REWATCH_GRACE_MS = 20_000
 
 export class PeerLink {
+  /** Identifica esta conexão; se a outra pessoa a recriar (queda do servidor), o número dela muda. */
+  readonly id = crypto.randomUUID().slice(0, 8)
+  /** Conexão do outro lado a que esta está ligada. */
+  remoteId?: string
   readonly pc = createPeerConnection()
   readonly outStats = new StatsSampler(this.pc, 'enviando')
   readonly inStats = new StatsSampler(this.pc, 'recebendo')
@@ -49,6 +63,13 @@ export class PeerLink {
 export class RoomSession {
   readonly links = new Map<string, PeerLink>()
   local: { stream: MediaStream; label: string; stop?: () => void } | null = null
+  /**
+   * Quem eu quero assistir, mesmo que a conexão caia e volte. O valor é até quando continuo
+   * querendo depois que a pessoa parou de transmitir (Infinity enquanto ela transmite).
+   */
+  private wanted = new Map<string, number>()
+  private wantedRoom: string | null = null
+  private connections = 0
   private listeners = new Set<() => void>()
   private unsubscribe: (() => void)[] = []
   private governorTimer: ReturnType<typeof setInterval>
@@ -113,6 +134,8 @@ export class RoomSession {
   // ---------- assistir ----------
 
   watch(peerId: string, on: boolean): void {
+    if (on) this.wanted.set(peerId, Infinity)
+    else this.wanted.delete(peerId)
     const link = this.links.get(peerId)
     if (!link || link.iWatch === on) return
     link.iWatch = on
@@ -140,6 +163,23 @@ export class RoomSession {
         .map((m) => [m.peerId, m])
     )
 
+    if (roomId !== this.wantedRoom) {
+      this.wanted.clear()
+      this.wantedRoom = roomId
+    }
+    // Reconectei ao servidor: quem está na 0.4.0 refaz a conexão comigo sem avisar (não manda o
+    // número da conexão), então refaço a minha também. Com quem está na versão nova, a conexão continua.
+    if (this.client.connections !== this.connections) {
+      if (this.connections > 0) {
+        for (const [peerId, link] of this.links) {
+          if (link.remoteId) continue
+          link.pc.close()
+          this.links.delete(peerId)
+        }
+      }
+      this.connections = this.client.connections
+    }
+
     for (const [peerId, link] of this.links) {
       if (!others.has(peerId)) {
         link.pc.close()
@@ -148,18 +188,42 @@ export class RoomSession {
     }
     for (const [peerId, member] of others) {
       const link = this.links.get(peerId) ?? this.createLink(peerId)
-      // Parou de transmitir: deixo de assistir (para assistir de novo, é preciso clicar de novo).
       if (!member.streaming && link.iWatch) {
         link.iWatch = false
         link.remote = null
       }
+      this.rewatch(link, member.streaming)
     }
+    // Quem sumiu da sala (queda de conexão) também conta o prazo para eu desistir de assistir.
+    for (const peerId of this.wanted.keys()) if (!others.has(peerId)) this.rewatch(undefined, false, peerId)
     if (roomId === null && this.local) this.stopStreaming(false)
     this.emit()
   }
 
-  private createLink(peerId: string): PeerLink {
+  /**
+   * Volta a assistir quem eu assistia, se a pessoa (re)começou a transmitir dentro do prazo.
+   * Cobre a conexão recriada depois de uma queda e quem para e volta logo a transmitir.
+   */
+  private rewatch(link: PeerLink | undefined, streaming: boolean, peerId = link?.peerId): void {
+    if (!peerId) return
+    const until = this.wanted.get(peerId)
+    if (until === undefined) return
+    if (!streaming) {
+      if (until === Infinity) this.wanted.set(peerId, Date.now() + REWATCH_GRACE_MS)
+      else if (Date.now() > until) this.wanted.delete(peerId)
+      return
+    }
+    this.wanted.set(peerId, Infinity)
+    if (link && !link.iWatch) {
+      link.iWatch = true
+      this.signal(peerId, { k: 'watch', on: true })
+    }
+  }
+
+  /** `remoteId`: a conexão do outro lado, quando já se sabe qual é. */
+  private createLink(peerId: string, remoteId?: string): PeerLink {
     const link = new PeerLink(peerId, this.client.peerId > peerId, () => this.settings)
+    link.remoteId = remoteId
     const { pc } = link
     this.links.set(peerId, link)
 
@@ -191,13 +255,27 @@ export class RoomSession {
       })
       this.emit()
     })
+    // Apresenta esta conexão: se o outro lado tinha uma conexão antiga comigo, ele a troca por uma nova.
+    this.signal(peerId, { k: 'hello' })
+    return link
+  }
+
+  /** A outra pessoa recriou a conexão comigo: troco a minha por uma nova, ligada à dela. */
+  private replaceLink(old: PeerLink, remoteId: string): PeerLink {
+    old.pc.close()
+    this.links.delete(old.peerId)
+    const link = this.createLink(old.peerId, remoteId)
+    const member = this.client.state.members.find((m) => m.peerId === old.peerId)
+    this.rewatch(link, !!member?.streaming)
+    this.emit()
     return link
   }
 
   // ---------- sinais ----------
 
   private signal(to: string, payload: Signal): void {
-    this.client.sendSignal(to, payload)
+    const link = this.links.get(to)
+    this.client.sendSignal(to, { ...payload, lid: link?.id, to: link?.remoteId })
   }
 
   private async onSignal(from: string, signal: Signal): Promise<void> {
@@ -205,7 +283,12 @@ export class RoomSession {
     if (!link) {
       const member = this.client.state.members.find((m) => m.peerId === from)
       if (!member || member.roomId !== this.roomId) return
-      link = this.createLink(from)
+      link = this.createLink(from, signal.lid)
+    }
+    if (signal.lid) {
+      if (signal.to && signal.to !== link.id) return // era para uma conexão minha que já fechei
+      if (!signal.to && link.remoteId && link.remoteId !== signal.lid) link = this.replaceLink(link, signal.lid)
+      link.remoteId = signal.lid
     }
     const { pc } = link
 

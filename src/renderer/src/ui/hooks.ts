@@ -70,12 +70,22 @@ export function useStreamAudio(stream: MediaStream | null, volume: number, muted
   }, [volume, muted, stream])
 }
 
-/** Fecha algo (menu, popover) ao clicar fora ou apertar Esc. */
-export function useDismiss(ref: React.RefObject<HTMLElement | null>, onClose: () => void, active = true): void {
+/**
+ * Fecha algo (menu, popover) ao clicar fora ou apertar Esc. `toggle` é o botão que abre e fecha:
+ * clicar nele não conta como "fora", senão o clique fecharia e o mesmo botão reabriria.
+ */
+export function useDismiss(
+  ref: React.RefObject<HTMLElement | null>,
+  onClose: () => void,
+  active = true,
+  toggle?: React.RefObject<HTMLElement | null>
+): void {
   useEffect(() => {
     if (!active) return
     const onPointer = (event: PointerEvent): void => {
-      if (ref.current && !ref.current.contains(event.target as Node)) onClose()
+      const target = event.target as Node
+      if (toggle?.current?.contains(target)) return
+      if (ref.current && !ref.current.contains(target)) onClose()
     }
     const onKey = (event: KeyboardEvent): void => {
       if (event.key === 'Escape') onClose()
@@ -86,7 +96,7 @@ export function useDismiss(ref: React.RefObject<HTMLElement | null>, onClose: ()
       document.removeEventListener('pointerdown', onPointer)
       document.removeEventListener('keydown', onKey)
     }
-  }, [ref, onClose, active])
+  }, [ref, onClose, active, toggle])
 }
 
 export async function copyText(text: string): Promise<boolean> {

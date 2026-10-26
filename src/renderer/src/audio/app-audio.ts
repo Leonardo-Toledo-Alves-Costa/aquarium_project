@@ -35,7 +35,7 @@ export async function startAppAudio(options: AudioOptions, volume: number): Prom
   player.connect(gain).connect(destination)
 
   const port = nextAudioPort()
-  await window.aquarium.startAudio(options)
+  const id = await window.aquarium.startAudio(options)
   const audioPort = await port
   player.port.postMessage({ port: audioPort }, [audioPort])
 
@@ -43,12 +43,12 @@ export async function startAppAudio(options: AudioOptions, volume: number): Prom
   track.contentHint = 'music'
   return {
     track,
-    setMode: (next) => window.aquarium.updateAudio(next),
+    setMode: (next) => window.aquarium.updateAudio(id, next),
     setVolume: (v) => {
       gain.gain.value = v
     },
     stop: () => {
-      window.aquarium.stopAudio()
+      window.aquarium.stopAudio(id)
       track.stop()
       context.close()
     }

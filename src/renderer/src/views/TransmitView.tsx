@@ -122,7 +122,7 @@ export function TransmitView(): React.JSX.Element {
         </div>
         <p className="muted small">
           Em jogos, use o modo "janela sem borda": a tela cheia exclusiva pode aparecer preta para quem assiste.
-          {window.aquarium.platform === 'win32' && ' O áudio do computador inteiro vai junto com a imagem.'}
+          {' No modo manual vai só a imagem, sem áudio.'}
         </p>
         {error && <p className="help bad">{error}</p>}
       </section>
