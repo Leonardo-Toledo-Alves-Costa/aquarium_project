@@ -4,7 +4,8 @@ import { DEFAULT_SERVER, serverUrlOf, updateSettings, useSettings, type AudioMod
 import type { RoomClient } from '../signaling/rooms'
 import { copyText, useDismiss } from './hooks'
 import { IconClose, IconLock } from './icons'
-import { BandwidthPicker } from './Palco'
+import { playSound } from './sounds'
+import { BandwidthPicker } from './StreamOptions'
 
 type Section = 'perfil' | 'transmissao' | 'grupo' | 'rede' | 'sobre'
 
@@ -19,12 +20,14 @@ const SECTIONS: { id: Section; label: string }[] = [
 export function SettingsDialog({
   client,
   groupCode,
+  streaming,
   onClose,
   onLeaveGroup,
   onManual
 }: {
   client: RoomClient
   groupCode: string
+  streaming: boolean
   onClose: () => void
   onLeaveGroup: () => void
   onManual: () => void
@@ -53,7 +56,7 @@ export function SettingsDialog({
           </div>
           {section === 'perfil' && <ProfileSection />}
           {section === 'transmissao' && <StreamSection />}
-          {section === 'grupo' && <GroupSection client={client} groupCode={groupCode} onLeaveGroup={onLeaveGroup} />}
+          {section === 'grupo' && <GroupSection client={client} groupCode={groupCode} streaming={streaming} onLeaveGroup={onLeaveGroup} />}
           {section === 'rede' && <NetworkSection client={client} onManual={onManual} />}
           {section === 'sobre' && (
             <div className="settings-section">
@@ -190,11 +193,46 @@ function StreamSection(): React.JSX.Element {
         </form>
         <span className="field-hint">Escreva o nome do programa como aparece no Gerenciador de Tarefas, na aba Detalhes.</span>
       </div>
+
+      <div className="field">
+        <div className="slider-field">
+          <label htmlFor="st-effects">
+            <span>Volume dos efeitos sonoros</span>
+            <span>{settings.effectsVolume === 0 ? 'desligados' : `${Math.round(settings.effectsVolume * 100)}%`}</span>
+          </label>
+          <div className="inline-form">
+            <input
+              id="st-effects"
+              type="range"
+              min={0}
+              max={100}
+              step={5}
+              value={Math.round(settings.effectsVolume * 100)}
+              onChange={(e) => updateSettings({ effectsVolume: Number(e.target.value) / 100 })}
+              onPointerUp={(e) => playSound('entrou-na-sala', Number(e.currentTarget.value) / 100)}
+            />
+            <button className="btn small" type="button" disabled={settings.effectsVolume === 0} onClick={() => playSound('transmissao-comecou')}>
+              Ouvir
+            </button>
+          </div>
+        </div>
+        <span className="field-hint">Avisos curtos quando alguém entra ou sai da sua sala, começa ou para de transmitir, ou começa a te assistir.</span>
+      </div>
     </div>
   )
 }
 
-function GroupSection({ client, groupCode, onLeaveGroup }: { client: RoomClient; groupCode: string; onLeaveGroup: () => void }): React.JSX.Element {
+function GroupSection({
+  client,
+  groupCode,
+  streaming,
+  onLeaveGroup
+}: {
+  client: RoomClient
+  groupCode: string
+  streaming: boolean
+  onLeaveGroup: () => void
+}): React.JSX.Element {
   const [show, setShow] = useState(false)
   const [copied, setCopied] = useState(false)
   const [confirmLeave, setConfirmLeave] = useState(false)
@@ -292,7 +330,10 @@ function GroupSection({ client, groupCode, onLeaveGroup }: { client: RoomClient;
             </button>
           </div>
         )}
-        <span className="field-hint">O código é apagado deste computador. Para voltar, será preciso colar o código de novo.</span>
+        <span className="field-hint">
+          O código é apagado deste computador. Para voltar, será preciso colar o código de novo.
+          {streaming && ' Sua transmissão para junto.'}
+        </span>
       </div>
     </div>
   )

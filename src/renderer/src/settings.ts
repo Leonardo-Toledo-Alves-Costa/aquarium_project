@@ -7,7 +7,8 @@ import { PRESETS, type CodecChoice, type PresetId, type Priority } from './rtc/p
 import type { SessionSettings } from './rtc/room-session'
 
 export type AudioMode = 'app' | 'all' | 'none'
-export type LayoutMode = 'lado' | 'foco'
+/** Abas: uma transmissão por vez, só ela é baixada. Lado a lado: várias ao mesmo tempo. */
+export type ViewMode = 'abas' | 'lado'
 
 export interface AppSettings {
   name: string
@@ -23,9 +24,15 @@ export interface AppSettings {
   sendVolume: number
   /** Apps (nome do .exe) que nunca entram no áudio, além de Discord e Aquarium. */
   blockedApps: string[]
-  layout: LayoutMode
+  /** Chave nova na 0.5: o antigo `layout` ('lado' por padrão) fica de fora para todos começarem nas abas. */
+  view: ViewMode
+  sidebarCollapsed: boolean
+  /** Última sala em que a pessoa estava; o app volta para ela ao abrir. */
+  lastRoomId: string | null
   /** Volume por pessoa assistida, de 0 a 2. */
   volumes: Record<string, number>
+  /** Volume dos efeitos sonoros, de 0 a 1. */
+  effectsVolume: number
 }
 
 // .env.development aponta para o servidor local; .env.production, para a Cloudflare.
@@ -60,8 +67,11 @@ function load(): AppSettings {
     audioMode: 'app',
     sendVolume: 1,
     blockedApps: [],
-    layout: 'lado',
-    volumes: {}
+    view: 'abas',
+    sidebarCollapsed: false,
+    lastRoomId: null,
+    volumes: {},
+    effectsVolume: 0.6
   }
   try {
     const saved = JSON.parse(localStorage.getItem(KEY) ?? '{}')

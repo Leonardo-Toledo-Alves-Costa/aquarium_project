@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, safeStorage, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, safeStorage, session } from 'electron'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { IPC, type CaptureSource } from '../shared/ipc'
@@ -18,8 +18,12 @@ function createWindow(): void {
     minWidth: 900,
     minHeight: 600,
     title: 'Aquarium',
-    backgroundColor: '#0c1518',
+    backgroundColor: '#131417',
     autoHideMenuBar: true,
+    // Sem a barra de título do Windows: os botões dela ficam por cima da barra de transmissões,
+    // com as cores do app. A barra tem 52px (styles.css); 51 deixa aparecer a linha de baixo dela.
+    titleBarStyle: 'hidden',
+    titleBarOverlay: { color: '#131417', symbolColor: '#cfd2d7', height: 51 },
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -101,6 +105,9 @@ function registerGroupCode(): void {
 }
 
 app.whenReady().then(() => {
+  // Sem o menu padrão no app instalado: os atalhos dele (Ctrl+- e Ctrl+=) mudariam o tamanho da
+  // interface inteira, e as teclas - e + já servem para o zoom da transmissão.
+  if (app.isPackaged) Menu.setApplicationMenu(null)
   session.defaultSession.setPermissionRequestHandler((_wc, permission, callback) => {
     callback(ALLOWED_PERMISSIONS.has(permission))
   })

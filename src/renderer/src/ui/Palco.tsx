@@ -1,44 +1,25 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { MemberInfo } from '../../../shared/rooms-protocol'
 import { audioOptions, startCapture, type Capture } from '../capture'
-import { formatDiagnostics } from '../diagnostics'
-import { PRESETS, PRIORITIES, type PresetId, type Priority } from '../rtc/presets'
-import type { PeerLink, RoomSession } from '../rtc/room-session'
-import { updateSettings, useSettings, type AudioMode } from '../settings'
+import { PRESETS } from '../rtc/presets'
+import type { RoomSession } from '../rtc/room-session'
+import { getSettings, updateSettings, useSettings } from '../settings'
 import type { RoomClient } from '../signaling/rooms'
-import { Avatar } from './Avatar'
-import { ContextMenu, MenuItem, MenuSeparator, MenuTitle, type MenuPosition } from './ContextMenu'
-import { copyText, useDismiss, useStats, useStreamAudio, useSubscribe, useUpdateState } from './hooks'
-import {
-  IconChevronDown,
-  IconDownload,
-  IconEye,
-  IconFocus,
-  IconGear,
-  IconMore,
-  IconPlus,
-  IconScreen,
-  IconSideBySide,
-  IconSignal,
-  IconSliders,
-  IconSpeaker,
-  IconSpeakerOff,
-  IconTank,
-  IconUsers
-} from './icons'
+import { ContextMenu, type MenuPosition } from './ContextMenu'
+import { copyText, useDismiss, useSubscribe } from './hooks'
+import { IconExitFullscreen, IconPlus, IconScreen, IconSideBySide, IconSidebar } from './icons'
 import { SettingsDialog } from './SettingsDialog'
+import { Sidebar } from './Sidebar'
 import { SourcePicker } from './SourcePicker'
+import { useRoomSounds } from './sounds'
+import { buildTiles, OwnMenu, RemoteMenu, StreamTabs, TileView, type Tile, type ZoomAction } from './Stage'
+import { ownDiagnostics, StreamOptions } from './StreamOptions'
 
-type Tile =
-  | { kind: 'own'; id: string; peerId: string; name: string; label: string; stream: MediaStream }
-  | { kind: 'remote'; id: string; peerId: string; name: string; label: string; stream: MediaStream; link: PeerLink }
-  | { kind: 'waiting'; id: string; peerId: string; name: string; label: string; watching: boolean }
-
-const AUDIO_OPTIONS: { id: AudioMode; label: string; hint: string }[] = [
-  { id: 'app', label: 'Só o app transmitido', hint: 'o som do jogo ou programa, nada mais' },
-  { id: 'all', label: 'Todos os apps', hint: 'tudo que toca no PC, menos os bloqueados' },
-  { id: 'none', label: 'Sem áudio', hint: 'só a imagem' }
-]
+interface Confirm {
+  title: string
+  body: string
+  action: string
+  onConfirm: () => void
+}
 
 export function Palco({
   client,
@@ -55,24 +36,38 @@ export function Palco({
 }): React.JSX.Element {
   useSubscribe(client)
   useSubscribe(session)
+  useRoomSounds(client, session)
   const settings = useSettings()
   const [picker, setPicker] = useState(false)
   const [settingsOpen, setSettingsOpen] = useState(false)
-  const [peopleOpen, setPeopleOpen] = useState(false)
   const [creatingRoom, setCreatingRoom] = useState(false)
+  const [optionsOpen, setOptionsOpen] = useState(false)
+  const [confirm, setConfirm] = useState<Confirm | null>(null)
   const [menu, setMenu] = useState<{ tileId: string; at: MenuPosition; anchor?: HTMLElement } | null>(null)
-  const [focusId, setFocusId] = useState<string | null>(null)
+  const [activeId, setActiveId] = useState<string | null>(null)
   const [masterMuted, setMasterMuted] = useState(false)
   const [mutedPeers, setMutedPeers] = useState<Set<string>>(new Set())
   const [error, setError] = useState<string | null>(null)
-  const peopleButton = useRef<HTMLButtonElement>(null)
+  const [fullscreen, setFullscreen] = useState(false)
+  const optionsButton = useRef<HTMLButtonElement>(null)
+  const stageRef = useRef<HTMLElement>(null)
+  const hoverId = useRef<string | null>(null)
+  const zoomers = useRef(new Map<string, (action: ZoomAction) => void>())
+  const idle = useIdle(2500)
 
   const me = client.me
   const roomId = me?.roomId ?? null
   const room = client.state.rooms.find((r) => r.id === roomId) ?? null
   const roomMembers = client.state.members.filter((m) => roomId !== null && m.roomId === roomId)
   const tiles = buildTiles(session, roomMembers, client.peerId)
-  const focused = tiles.find((t) => t.id === focusId) ?? tiles[0]
+  const view = settings.view
+  const active =
+    tiles.find((t) => t.id === activeId) ??
+    tiles.find((t) => t.kind === 'remote') ??
+    tiles.find((t) => t.kind === 'waiting' && t.watching) ??
+    tiles.find((t) => t.kind !== 'own') ??
+    tiles[0]
+  const nameOf = (peerId: string): string => client.state.members.find((m) => m.peerId === peerId)?.name ?? peerId
 
   // Transmitindo ou assistindo: a atualização espera para baixar, e reiniciar pede confirmação.
   const busy = session.local !== null || [...session.links.values()].some((l) => l.iWatch)
@@ -81,11 +76,82 @@ export function Palco({
     return () => void window.aquarium.setBusy(false)
   }, [busy])
 
+  // Ao abrir o app, volta para a última sala (só na primeira conexão; depois de uma queda,
+  // o RoomClient já volta sozinho para a sala em que estava).
+  const autoJoined = useRef(false)
+  useEffect(() => {
+    if (autoJoined.current || client.connections === 0) return
+    autoJoined.current = true
+    const last = getSettings().lastRoomId
+    if (client.me?.roomId == null && last && client.state.rooms.some((r) => r.id === last)) client.join(last)
+  }, [client, client.connections])
+
+  useEffect(() => {
+    if (roomId !== null) updateSettings({ lastRoomId: roomId })
+  }, [roomId])
+
+  // ---------- salas ----------
+
+  /** Trocar de sala ou sair encerra a transmissão; nesse caso, pergunta antes. */
   const join = (id: string | null): void => {
-    if (session.local && id !== roomId) session.stopStreaming()
-    client.join(id)
-    setFocusId(null)
+    if (id === roomId) return
+    const go = (): void => {
+      if (session.local) session.stopStreaming()
+      client.join(id)
+      setActiveId(null)
+      if (id === null) updateSettings({ lastRoomId: null })
+    }
+    if (!session.local) return go()
+    const target = client.state.rooms.find((r) => r.id === id)
+    setConfirm({
+      title: target ? `Entrar em ${target.name}?` : 'Sair da sala?',
+      body: target
+        ? 'Sua transmissão vai parar, porque só dá para transmitir para a sala em que você está.'
+        : 'Sua transmissão vai parar junto.',
+      action: target ? 'Parar e trocar de sala' : 'Parar e sair',
+      onConfirm: go
+    })
   }
+
+  // ---------- assistir ----------
+
+  const watching = (peerId: string): boolean => !!session.links.get(peerId)?.iWatch
+
+  /** Nas abas, só a transmissão escolhida é baixada; a sua tela é só uma prévia local. */
+  const showOnly = (id: string): void => {
+    for (const t of tiles) {
+      if (t.kind === 'own') continue
+      const want = t.peerId === id
+      if (watching(t.peerId) !== want) session.watch(t.peerId, want)
+    }
+  }
+
+  const selectTab = (tile: Tile): void => {
+    setActiveId(tile.id)
+    if (view === 'abas') showOnly(tile.id)
+    else if (tile.kind !== 'own') session.watch(tile.peerId, !watching(tile.peerId))
+  }
+
+  const watch = (peerId: string): void => {
+    setActiveId(peerId)
+    if (view === 'abas') showOnly(peerId)
+    else session.watch(peerId, true)
+  }
+
+  // Garantia das abas: se algo religar outra transmissão (quem parou e voltou em seguida volta a ser
+  // assistido sozinho), fica só a da aba escolhida.
+  useEffect(() => {
+    if (view !== 'abas') return
+    const watched = [...session.links.values()].filter((l) => l.iWatch)
+    if (watched.length > 1) for (const l of watched) if (l.peerId !== active?.id) session.watch(l.peerId, false)
+  })
+
+  const setView = (next: 'abas' | 'lado'): void => {
+    updateSettings({ view: next })
+    if (next === 'abas' && active) showOnly(active.id)
+  }
+
+  // ---------- transmitir ----------
 
   const captureRef = useRef<Capture | null>(null)
 
@@ -99,6 +165,10 @@ export function Palco({
     captureRef.current?.audio?.setVolume(settings.sendVolume)
   }, [settings.sendVolume])
 
+  useEffect(() => {
+    if (!session.local) setOptionsOpen(false)
+  }, [session.local])
+
   const startStreaming = async (source: Parameters<typeof startCapture>[0]): Promise<void> => {
     setPicker(false)
     try {
@@ -108,35 +178,157 @@ export function Palco({
         capture.stop()
         if (captureRef.current === capture) captureRef.current = null
       })
-      setFocusId('me')
     } catch (err) {
       console.error(err)
       setError('Não foi possível capturar essa tela ou janela. Tente outra.')
     }
   }
 
+  // ---------- tela cheia, zoom e teclado ----------
+
+  // A tela cheia é do palco inteiro: as abas e os menus continuam funcionando dentro dela.
+  const toggleFullscreen = (): void => {
+    if (document.fullscreenElement) void document.exitFullscreen()
+    else void stageRef.current?.requestFullscreen()
+  }
+  useEffect(() => {
+    const onChange = (): void => setFullscreen(document.fullscreenElement !== null && document.fullscreenElement === stageRef.current)
+    document.addEventListener('fullscreenchange', onChange)
+    return () => document.removeEventListener('fullscreenchange', onChange)
+  }, [])
+
+  const registerZoom = useCallback((tileId: string, zoom: ((action: ZoomAction) => void) | null) => {
+    if (zoom) zoomers.current.set(tileId, zoom)
+    else zoomers.current.delete(tileId)
+  }, [])
+
+  const toggleMute = (peerId: string): void =>
+    setMutedPeers((prev) => {
+      const next = new Set(prev)
+      if (next.has(peerId)) next.delete(peerId)
+      else next.add(peerId)
+      return next
+    })
+
+  const onKey = (e: KeyboardEvent): void => {
+    if (e.ctrlKey || e.altKey || e.metaKey || e.repeat) return
+    const target = e.target as HTMLElement | null
+    // O controle de volume é um input, mas as teclas de atalho continuam valendo depois de mexer nele.
+    if (target?.closest('input:not([type="range"]), select, textarea, [role="menu"], [role="dialog"]')) return
+    if (document.querySelector('.modal-backdrop')) return
+    const zoomTarget = view === 'abas' ? active?.id : (hoverId.current ?? active?.id)
+    const key = e.key.toLowerCase()
+    if (/^[1-9]$/.test(key)) {
+      const tile = tiles[Number(key) - 1]
+      if (tile) selectTab(tile)
+    } else if (key === 'f') toggleFullscreen()
+    else if (key === 'b' && !fullscreen) updateSettings({ sidebarCollapsed: !settings.sidebarCollapsed })
+    else if (key === 'm') {
+      const tile = tiles.find((t) => t.id === zoomTarget)
+      if (tile?.kind === 'remote') toggleMute(tile.peerId)
+    } else if (zoomTarget && (key === 'z' || key === '+' || key === '=' || key === '-' || key === '0')) {
+      const action: ZoomAction = key === 'z' ? 'toggle' : key === '0' ? 'reset' : key === '-' ? 'out' : 'in'
+      zoomers.current.get(zoomTarget)?.(action)
+    } else return
+    e.preventDefault()
+  }
+  const onKeyRef = useRef(onKey)
+  onKeyRef.current = onKey
+  useEffect(() => {
+    const handler = (e: KeyboardEvent): void => onKeyRef.current(e)
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [])
+
+  // ---------- menus ----------
+
   // Clicar de novo no botão que abriu o menu fecha o menu.
   const openMenu = (tileId: string, at: MenuPosition, anchor?: HTMLElement): void =>
     setMenu((current) => (anchor && current?.anchor === anchor ? null : { tileId, at, anchor }))
   const menuTile = menu ? tiles.find((t) => t.id === menu.tileId) : undefined
 
-  return (
-    <div className="palco">
-      <TopBar
-        client={client}
-        roomName={room?.name ?? null}
-        roomMembers={roomMembers}
-        onJoin={join}
-        onCreateRoom={() => setCreatingRoom(true)}
-        peopleButton={peopleButton}
-        onPeople={() => setPeopleOpen((v) => !v)}
-      />
+  const tileProps = {
+    session,
+    onWatch: watch,
+    onToggleMute: toggleMute,
+    onVolume: (peerId: string, volume: number) => updateSettings({ volumes: { ...settings.volumes, [peerId]: volume } }),
+    onMenu: openMenu,
+    onFullscreen: toggleFullscreen,
+    onHover: (id: string | null) => (hoverId.current = id),
+    registerZoom
+  }
+  const tileView = (t: Tile): React.JSX.Element => (
+    <TileView
+      key={t.id}
+      tile={t}
+      muted={masterMuted || mutedPeers.has(t.peerId)}
+      volume={settings.volumes[t.peerId] ?? 1}
+      fullscreen={fullscreen}
+      {...tileProps}
+    />
+  )
+  const shown = view === 'abas' ? (active ? [active] : []) : tiles
+  const collapsed = settings.sidebarCollapsed
 
-      <main className={`stage layout-${settings.layout}`}>
+  return (
+    <div className={`palco ${collapsed ? 'collapsed' : ''}`}>
+      {!collapsed && (
+        <Sidebar
+          client={client}
+          session={session}
+          roomId={roomId}
+          masterMuted={masterMuted}
+          optionsOpen={optionsOpen}
+          optionsButton={optionsButton}
+          onJoin={join}
+          onLeave={() => join(null)}
+          onCreateRoom={() => setCreatingRoom(true)}
+          onDeleteRoom={(id, name) =>
+            setConfirm({
+              title: `Apagar a sala ${name}?`,
+              body: 'Quem estiver nela volta para fora das salas, e as transmissões de dentro dela param.',
+              action: 'Apagar sala',
+              onConfirm: () => client.deleteRoom(id)
+            })
+          }
+          onWatch={watch}
+          onStream={() => setPicker(true)}
+          onOptions={() => setOptionsOpen((v) => !v)}
+          onChangeSource={() => setPicker(true)}
+          onStop={() => session.stopStreaming()}
+          onToggleMasterMute={() => setMasterMuted((v) => !v)}
+          onSettings={() => setSettingsOpen(true)}
+          onCollapse={() => updateSettings({ sidebarCollapsed: true })}
+        />
+      )}
+
+      <main ref={stageRef} className={`stage ${fullscreen ? 'fullscreen' : ''} ${idle ? 'idle' : ''} view-${view}`}>
+        <header className="stream-bar drag">
+          {collapsed && !fullscreen && (
+            <button className="bar-btn" aria-label="Mostrar a barra lateral (B)" title="Mostrar a barra lateral (B)" onClick={() => updateSettings({ sidebarCollapsed: false })}>
+              <IconSidebar size={18} />
+            </button>
+          )}
+          {room && <h1 className="bar-room">{room.name}</h1>}
+          {tiles.length > 0 && <StreamTabs tiles={tiles} activeId={active?.id ?? null} view={view} onSelect={selectTab} />}
+          <span className="spacer" />
+          {tiles.length > 1 && (
+            <button className={`bar-toggle ${view === 'lado' ? 'on' : ''}`} aria-pressed={view === 'lado'} onClick={() => setView(view === 'lado' ? 'abas' : 'lado')}>
+              <IconSideBySide size={16} />
+              Lado a lado
+            </button>
+          )}
+          {fullscreen && (
+            <button className="bar-toggle" onClick={toggleFullscreen}>
+              <IconExitFullscreen size={16} />
+              Sair da tela cheia
+              <kbd>Esc</kbd>
+            </button>
+          )}
+        </header>
+
         {(client.status === 'recusado' || client.error) && (
-          <p className="alert stage-alert">
-            {client.status === 'recusado' && !client.error ? 'O servidor recusou a entrada no grupo.' : client.error}
-          </p>
+          <p className="alert stage-alert">{client.status === 'recusado' && !client.error ? 'O servidor recusou a entrada no grupo.' : client.error}</p>
         )}
         {error && (
           <p className="alert stage-alert" onClick={() => setError(null)}>
@@ -144,82 +336,59 @@ export function Palco({
           </p>
         )}
 
-        {roomId === null ? (
-          <Lobby client={client} onJoin={join} onCreate={() => setCreatingRoom(true)} />
-        ) : tiles.length === 0 ? (
-          <div className="empty">
-            <IconScreen size={56} />
-            <h2>Ninguém está transmitindo em {room?.name}</h2>
-            <p className="muted">Qualquer pessoa da sala pode transmitir. Use o botão Transmitir aqui embaixo.</p>
-          </div>
-        ) : settings.layout === 'foco' && tiles.length > 1 ? (
-          <div className="focus-layout">
-            <TileView tile={focused} big {...tileProps()} />
-            <div className="strip">
-              {tiles
-                .filter((t) => t.id !== focused.id)
-                .map((t) => (
-                  <TileView key={t.id} tile={t} {...tileProps()} />
-                ))}
+        <div className="stage-body">
+          {roomId === null ? (
+            <div className="empty">
+              <h2>Escolha uma sala na barra lateral</h2>
+              <p className="muted">Quem estiver transmitindo nela aparece aqui, uma aba por pessoa.</p>
+              <button className="btn" onClick={() => setCreatingRoom(true)}>
+                <IconPlus size={16} />
+                Criar sala
+              </button>
             </div>
-          </div>
-        ) : (
-          <div className="grid" style={{ gridTemplateColumns: `repeat(${tiles.length > 1 ? 2 : 1}, minmax(0, 1fr))` }}>
-            {tiles.map((t) => (
-              <TileView key={t.id} tile={t} {...tileProps()} />
-            ))}
-          </div>
+          ) : tiles.length === 0 ? (
+            <div className="empty">
+              <h2>Ninguém está transmitindo em {room?.name}</h2>
+              <p className="muted">Qualquer pessoa da sala pode mostrar a tela.</p>
+              <button className="btn primary" onClick={() => setPicker(true)}>
+                <IconScreen size={18} />
+                Transmitir minha tela
+              </button>
+            </div>
+          ) : (
+            <div className={`tiles count-${shown.length > 1 ? 'many' : 'one'}`}>{shown.map(tileView)}</div>
+          )}
+        </div>
+
+        {menu && menuTile && (
+          <ContextMenu at={menu.at} label="Opções da transmissão" toggle={menu.anchor} onClose={() => setMenu(null)}>
+            {menuTile.kind === 'own' ? (
+              <OwnMenu
+                label={menuTile.label}
+                onChangeSource={() => {
+                  setMenu(null)
+                  setPicker(true)
+                }}
+                onDiagnostics={async () => copyText(await ownDiagnostics(session, nameOf))}
+                onStop={() => {
+                  setMenu(null)
+                  session.stopStreaming()
+                }}
+              />
+            ) : menuTile.kind === 'remote' ? (
+              <RemoteMenu
+                tile={menuTile}
+                muted={mutedPeers.has(menuTile.peerId)}
+                onToggleMute={() => toggleMute(menuTile.peerId)}
+                onStopWatching={() => session.watch(menuTile.peerId, false)}
+                onClose={() => setMenu(null)}
+              />
+            ) : null}
+          </ContextMenu>
         )}
       </main>
 
-      <RoomRail client={client} roomId={roomId} onJoin={join} onCreate={() => setCreatingRoom(true)} />
-
-      <Dock
-        inRoom={roomId !== null}
-        streaming={!!session.local}
-        masterMuted={masterMuted}
-        layout={settings.layout}
-        onStream={(at, anchor) => (session.local ? openMenu('me', at, anchor) : setPicker(true))}
-        onToggleMute={() => setMasterMuted((v) => !v)}
-        onToggleLayout={() => updateSettings({ layout: settings.layout === 'lado' ? 'foco' : 'lado' })}
-        onSettings={() => setSettingsOpen(true)}
-        onLeave={() => join(null)}
-      />
-
-      {peopleOpen && <PeopleDrawer client={client} toggle={peopleButton} onClose={() => setPeopleOpen(false)} />}
-
-      {menu && menuTile && (
-        <ContextMenu at={menu.at} label="Opções da transmissão" toggle={menu.anchor} onClose={() => setMenu(null)}>
-          {menuTile.kind === 'own' ? (
-            <OwnMenu
-              session={session}
-              label={menuTile.label}
-              nameOf={(peerId) => client.state.members.find((m) => m.peerId === peerId)?.name ?? peerId}
-              onChangeSource={() => {
-                setMenu(null)
-                setPicker(true)
-              }}
-              onClose={() => setMenu(null)}
-            />
-          ) : menuTile.kind === 'remote' ? (
-            <RemoteMenu
-              tile={menuTile}
-              session={session}
-              muted={mutedPeers.has(menuTile.peerId)}
-              onToggleMute={() =>
-                setMutedPeers((prev) => {
-                  const next = new Set(prev)
-                  if (next.has(menuTile.peerId)) next.delete(menuTile.peerId)
-                  else next.add(menuTile.peerId)
-                  return next
-                })
-              }
-              onClose={() => setMenu(null)}
-            />
-          ) : null}
-        </ContextMenu>
-      )}
-
+      {optionsOpen && session.local && <StreamOptions session={session} nameOf={nameOf} toggle={optionsButton} onClose={() => setOptionsOpen(false)} />}
       {picker && <SourcePicker onPick={startStreaming} onClose={() => setPicker(false)} />}
       {creatingRoom && (
         <CreateRoomDialog
@@ -230,10 +399,12 @@ export function Palco({
           onClose={() => setCreatingRoom(false)}
         />
       )}
+      {confirm && <ConfirmDialog confirm={confirm} onClose={() => setConfirm(null)} />}
       {settingsOpen && (
         <SettingsDialog
           client={client}
           groupCode={groupCode}
+          streaming={session.local !== null}
           onClose={() => setSettingsOpen(false)}
           onLeaveGroup={onLeaveGroup}
           onManual={onManual}
@@ -241,216 +412,50 @@ export function Palco({
       )}
     </div>
   )
-
-  function tileProps(): Omit<TileViewProps, 'tile' | 'big'> {
-    return {
-      session,
-      masterMuted,
-      mutedPeers,
-      volumes: settings.volumes,
-      onMenu: openMenu,
-      onFocus: (id) => {
-        setFocusId(id)
-        if (settings.layout !== 'foco') updateSettings({ layout: 'foco' })
-      }
-    }
-  }
 }
 
-function buildTiles(session: RoomSession, roomMembers: MemberInfo[], selfId: string): Tile[] {
-  const tiles: Tile[] = []
-  const me = roomMembers.find((m) => m.peerId === selfId)
-  if (session.local) {
-    tiles.push({ kind: 'own', id: 'me', peerId: selfId, name: me?.name ?? 'Você', label: session.local.label, stream: session.local.stream })
-  }
-  for (const m of roomMembers) {
-    if (m.peerId === selfId || !m.streaming) continue
-    const link = session.links.get(m.peerId)
-    const label = m.streamLabel ?? 'Tela'
-    if (link?.iWatch && link.remote) {
-      tiles.push({ kind: 'remote', id: m.peerId, peerId: m.peerId, name: m.name, label, stream: link.remote, link })
-    } else {
-      tiles.push({ kind: 'waiting', id: m.peerId, peerId: m.peerId, name: m.name, label, watching: !!link?.iWatch })
+function useIdle(ms: number): boolean {
+  const [idle, setIdle] = useState(false)
+  useEffect(() => {
+    let timer = setTimeout(() => setIdle(true), ms)
+    const wake = (): void => {
+      setIdle(false)
+      clearTimeout(timer)
+      timer = setTimeout(() => setIdle(true), ms)
     }
-  }
-  return tiles
+    window.addEventListener('pointermove', wake)
+    window.addEventListener('keydown', wake)
+    return () => {
+      clearTimeout(timer)
+      window.removeEventListener('pointermove', wake)
+      window.removeEventListener('keydown', wake)
+    }
+  }, [ms])
+  return idle
 }
 
-// ---------- barra superior ----------
-
-function TopBar({
-  client,
-  roomName,
-  roomMembers,
-  onJoin,
-  onCreateRoom,
-  peopleButton,
-  onPeople
-}: {
-  client: RoomClient
-  roomName: string | null
-  roomMembers: MemberInfo[]
-  onJoin: (id: string | null) => void
-  onCreateRoom: () => void
-  peopleButton: React.RefObject<HTMLButtonElement | null>
-  onPeople: () => void
-}): React.JSX.Element {
-  const [open, setOpen] = useState(false)
+function ConfirmDialog({ confirm, onClose }: { confirm: Confirm; onClose: () => void }): React.JSX.Element {
   const ref = useRef<HTMLDivElement>(null)
-  useDismiss(ref, () => setOpen(false), open)
-  const status = client.status
-  const update = useUpdateState()
-
+  useDismiss(ref, onClose)
   return (
-    <header className="topbar">
-      <div className="switcher" ref={ref}>
-        <button className="switcher-btn" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
-          <IconTank size={18} />
-          <span className="switcher-text">
-            <span className="switcher-room">{roomName ?? 'Nenhuma sala'}</span>
-            <span className="switcher-hint">trocar de sala</span>
-          </span>
-          <IconChevronDown size={16} />
-        </button>
-        {open && (
-          <div className="dropdown" role="menu" aria-label="Salas">
-            {client.state.rooms.map((r) => {
-              const members = client.state.members.filter((m) => m.roomId === r.id)
-              const live = members.filter((m) => m.streaming).length
-              return (
-                <button
-                  key={r.id}
-                  role="menuitem"
-                  className={`dropdown-item ${r.name === roomName ? 'current' : ''}`}
-                  onClick={() => {
-                    onJoin(r.id)
-                    setOpen(false)
-                  }}
-                >
-                  <span>{r.name}</span>
-                  <span className="dropdown-meta">
-                    {live > 0 && <span className="live-text">{live} ao vivo</span>}
-                    {members.length > 0 ? `${members.length} ${members.length === 1 ? 'pessoa' : 'pessoas'}` : 'vazia'}
-                  </span>
-                </button>
-              )
-            })}
-            <div className="menu-sep" />
-            <button
-              role="menuitem"
-              className="dropdown-item accent"
-              onClick={() => {
-                setOpen(false)
-                onCreateRoom()
-              }}
-            >
-              Criar sala
-            </button>
-          </div>
-        )}
-      </div>
-
-      <div className="stack-avatars" aria-label={`${roomMembers.length} na sala`}>
-        {roomMembers.slice(0, 6).map((m) => (
-          <span key={m.peerId} title={m.name}>
-            <Avatar peerId={m.peerId} name={m.name} size={30} />
-          </span>
-        ))}
-        {roomName && <span className="muted stack-count">{roomMembers.length} na sala</span>}
-      </div>
-
-      <div className="spacer" />
-
-      <span className={`conn conn-${status}`} role="status">
-        <IconSignal size={14} />
-        {status === 'conectado' ? 'conectado' : status === 'recusado' ? 'recusado' : status === 'reconectando' ? 'reconectando…' : 'conectando…'}
-      </span>
-      <button ref={peopleButton} className="icon-btn" aria-label="Pessoas do grupo" onClick={onPeople}>
-        <IconUsers size={18} />
-      </button>
-      {update.ready && (
-        <button
-          className="icon-btn update-ready"
-          aria-label={`Atualização ${update.version} pronta. Reiniciar para instalar`}
-          title={`Versão ${update.version} pronta: clique para reiniciar e atualizar`}
-          onClick={() => void window.aquarium.installUpdate()}
-        >
-          <IconDownload size={18} />
-        </button>
-      )}
-    </header>
-  )
-}
-
-// ---------- salas ----------
-
-function initials(name: string): string {
-  const words = name.trim().split(/\s+/)
-  return (words.length > 1 ? words[0][0] + words[1][0] : name.slice(0, 2)).toUpperCase()
-}
-
-function RoomRail({
-  client,
-  roomId,
-  onJoin,
-  onCreate
-}: {
-  client: RoomClient
-  roomId: string | null
-  onJoin: (id: string) => void
-  onCreate: () => void
-}): React.JSX.Element {
-  return (
-    <nav className="rail" aria-label="Salas do grupo">
-      {client.state.rooms.map((r) => {
-        const live = client.state.members.some((m) => m.roomId === r.id && m.streaming)
-        const count = client.state.members.filter((m) => m.roomId === r.id).length
-        return (
-          <button
-            key={r.id}
-            className={`rail-btn ${r.id === roomId ? 'current' : ''}`}
-            title={`${r.name}${count ? ` · ${count} na sala` : ''}${live ? ' · ao vivo' : ''}`}
-            aria-label={`${r.name}${r.id === roomId ? ' (sala atual)' : ''}${live ? ', alguém transmitindo' : ''}`}
-            onClick={() => onJoin(r.id)}
-          >
-            {initials(r.name)}
-            {live && <span className="rail-live" />}
+    <div className="modal-backdrop">
+      <div ref={ref} className="modal small" role="alertdialog" aria-label={confirm.title}>
+        <h2>{confirm.title}</h2>
+        <p className="muted">{confirm.body}</p>
+        <div className="choice-row end">
+          <button className="btn ghost" autoFocus onClick={onClose}>
+            Cancelar
           </button>
-        )
-      })}
-      <button className="rail-btn add" aria-label="Criar sala" title="Criar sala" onClick={onCreate}>
-        <IconPlus size={18} />
-      </button>
-    </nav>
-  )
-}
-
-function Lobby({ client, onJoin, onCreate }: { client: RoomClient; onJoin: (id: string) => void; onCreate: () => void }): React.JSX.Element {
-  return (
-    <div className="lobby">
-      <h1>Escolha uma sala</h1>
-      <div className="lobby-grid">
-        {client.state.rooms.map((r) => {
-          const members = client.state.members.filter((m) => m.roomId === r.id)
-          const live = members.filter((m) => m.streaming)
-          return (
-            <button key={r.id} className="lobby-card" onClick={() => onJoin(r.id)}>
-              <span className="lobby-name">{r.name}</span>
-              <span className="lobby-meta">
-                {live.length > 0 ? <span className="live-text">{live.map((m) => m.name).join(', ')} ao vivo</span> : members.length > 0 ? `${members.length} na sala` : 'vazia'}
-              </span>
-              <span className="lobby-avatars">
-                {members.map((m) => (
-                  <Avatar key={m.peerId} peerId={m.peerId} name={m.name} size={24} />
-                ))}
-              </span>
-            </button>
-          )
-        })}
-        <button className="lobby-card add" onClick={onCreate}>
-          <IconPlus size={20} />
-          <span>Criar sala</span>
-        </button>
+          <button
+            className="btn danger"
+            onClick={() => {
+              confirm.onConfirm()
+              onClose()
+            }}
+          >
+            {confirm.action}
+          </button>
+        </div>
       </div>
     </div>
   )
@@ -487,473 +492,5 @@ function CreateRoomDialog({ onCreate, onClose }: { onCreate: (name: string) => v
         </div>
       </form>
     </div>
-  )
-}
-
-// ---------- transmissões ----------
-
-interface TileViewProps {
-  tile: Tile
-  big?: boolean
-  session: RoomSession
-  masterMuted: boolean
-  mutedPeers: Set<string>
-  volumes: Record<string, number>
-  onMenu: (tileId: string, at: MenuPosition, anchor?: HTMLElement) => void
-  onFocus: (tileId: string) => void
-}
-
-function TileView({ tile, big, session, masterMuted, mutedPeers, volumes, onMenu, onFocus }: TileViewProps): React.JSX.Element {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const ref = useRef<HTMLElement>(null)
-  const stream = tile.kind === 'waiting' ? null : tile.stream
-  const remoteStream = tile.kind === 'remote' ? tile.stream : null
-  useStreamAudio(remoteStream, volumes[tile.peerId] ?? 1, masterMuted || mutedPeers.has(tile.peerId))
-  const stats = useStats(tile.kind === 'remote' ? tile.link.inStats : undefined, tile.kind === 'remote')
-  const watchers = tile.kind === 'own' ? [...session.links.values()].filter((l) => l.theyWatch).length : 0
-
-  useEffect(() => {
-    if (videoRef.current && stream && videoRef.current.srcObject !== stream) videoRef.current.srcObject = stream
-  }, [stream])
-
-  const fullscreen = (): void => {
-    if (document.fullscreenElement) document.exitFullscreen()
-    else ref.current?.requestFullscreen()
-  }
-
-  return (
-    <section
-      ref={ref}
-      id={`tile-${tile.id}`}
-      className={`tile ${big ? 'big' : ''} ${tile.kind}`}
-      aria-label={tile.kind === 'own' ? 'Sua transmissão' : `Transmissão de ${tile.name}`}
-      onContextMenu={(e) => {
-        e.preventDefault()
-        if (tile.kind !== 'waiting') onMenu(tile.id, { x: e.clientX, y: e.clientY })
-      }}
-      onDoubleClick={() => (big ? fullscreen() : onFocus(tile.id))}
-    >
-      {stream ? (
-        <video ref={videoRef} autoPlay playsInline muted />
-      ) : (
-        <div className="tile-waiting">
-          <IconScreen size={48} />
-          <span className="tile-waiting-label">{tile.label}</span>
-          {tile.kind === 'waiting' && (
-            <button className="btn primary" disabled={tile.watching} onClick={() => session.watch(tile.peerId, true)}>
-              {tile.watching ? 'Conectando…' : 'Assistir'}
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="tile-name">
-        <Avatar peerId={tile.peerId} name={tile.name} size={24} />
-        <span>{tile.kind === 'own' ? `${tile.name} (você)` : tile.name}</span>
-        <span className="live-pill">AO VIVO</span>
-        {stream && <span className="tile-label">{tile.label}</span>}
-      </div>
-
-      {tile.kind === 'own' && (
-        <div className="tile-chip">
-          <IconEye size={14} /> {watchers === 0 ? 'ninguém assistindo' : `${watchers} assistindo`}
-        </div>
-      )}
-      {tile.kind === 'remote' && stats?.height && (
-        <div className="tile-chip mono">
-          {stats.height}p · {Math.round(stats.fps ?? 0)} fps{stats.route?.rttMs !== undefined ? ` · ${stats.route.rttMs} ms` : ''}
-        </div>
-      )}
-
-      {tile.kind !== 'waiting' && (
-        <button
-          className="tile-more"
-          aria-label="Opções da transmissão"
-          onClick={(e) => {
-            const r = e.currentTarget.getBoundingClientRect()
-            onMenu(tile.id, { x: r.left, y: r.bottom + 4 }, e.currentTarget)
-          }}
-        >
-          <IconMore size={18} />
-        </button>
-      )}
-    </section>
-  )
-}
-
-function RemoteMenu({
-  tile,
-  session,
-  muted,
-  onToggleMute,
-  onClose
-}: {
-  tile: Extract<Tile, { kind: 'remote' }>
-  session: RoomSession
-  muted: boolean
-  onToggleMute: () => void
-  onClose: () => void
-}): React.JSX.Element {
-  const settings = useSettings()
-  const volume = Math.round((settings.volumes[tile.peerId] ?? 1) * 100)
-  const [copied, setCopied] = useState(false)
-  return (
-    <>
-      <MenuTitle>
-        <Avatar peerId={tile.peerId} name={tile.name} size={22} /> Transmissão de {tile.name}
-      </MenuTitle>
-      <div className="menu-slider">
-        <label htmlFor="menu-volume">
-          <span>Volume</span>
-          <span>{volume}%</span>
-        </label>
-        <input
-          id="menu-volume"
-          type="range"
-          min={0}
-          max={200}
-          step={5}
-          value={volume}
-          onChange={(e) => updateSettings({ volumes: { ...settings.volumes, [tile.peerId]: Number(e.target.value) / 100 } })}
-        />
-      </div>
-      <button role="menuitemcheckbox" aria-checked={muted} className="menu-item" onClick={onToggleMute}>
-        <span>Silenciar o áudio</span>
-        <span className={`toggle ${muted ? 'on' : ''}`} aria-hidden="true" />
-      </button>
-      <MenuItem
-        onClick={() => {
-          document.getElementById(`tile-${tile.id}`)?.requestFullscreen()
-          onClose()
-        }}
-      >
-        Tela cheia
-      </MenuItem>
-      <MenuItem
-        onClick={async () => {
-          const sample = await tile.link.inStats.sample()
-          if (await copyText(formatDiagnostics({ role: 'assistindo' }, sample))) setCopied(true)
-        }}
-      >
-        {copied ? 'Diagnóstico copiado' : 'Copiar diagnóstico'}
-      </MenuItem>
-      <MenuSeparator />
-      <MenuItem
-        danger
-        onClick={() => {
-          session.watch(tile.peerId, false)
-          onClose()
-        }}
-      >
-        Parar de assistir
-      </MenuItem>
-    </>
-  )
-}
-
-function OwnMenu({
-  session,
-  label,
-  nameOf,
-  onChangeSource,
-  onClose
-}: {
-  session: RoomSession
-  label: string
-  nameOf: (peerId: string) => string
-  onChangeSource: () => void
-  onClose: () => void
-}): React.JSX.Element {
-  const settings = useSettings()
-  const [copied, setCopied] = useState(false)
-
-  const diagnostics = async (): Promise<string> => {
-    const track = session.local?.stream.getVideoTracks()[0]
-    const s = track?.getSettings()
-    const parts: string[] = []
-    for (const link of session.links.values()) {
-      if (link.senders.length === 0) continue
-      parts.push(
-        formatDiagnostics(
-          {
-            role: 'transmitindo',
-            viewer: nameOf(link.peerId),
-            settings: session.currentSettings,
-            codec: session.currentSettings.codec,
-            capture: { width: s?.width, height: s?.height, fps: s?.frameRate }
-          },
-          await link.outStats.sample()
-        )
-      )
-    }
-    return parts.join('\n\n') || 'Ninguém está assistindo agora.'
-  }
-
-  return (
-    <>
-      <MenuTitle>
-        <span className="live-pill">AO VIVO</span> Sua transmissão · {label}
-      </MenuTitle>
-      <div className="menu-section">Áudio da transmissão</div>
-      <div role="group" aria-label="Áudio da transmissão">
-        {AUDIO_OPTIONS.map((o) => (
-          <button
-            key={o.id}
-            role="menuitemradio"
-            aria-checked={settings.audioMode === o.id}
-            className={`menu-radio ${settings.audioMode === o.id ? 'on' : ''}`}
-            onClick={() => updateSettings({ audioMode: o.id })}
-          >
-            <span className="radio-dot" aria-hidden="true" />
-            <span className="menu-radio-text">
-              <span>{o.label}</span>
-              <span className="menu-hint">{o.hint}</span>
-            </span>
-          </button>
-        ))}
-      </div>
-      <p className="menu-note">Discord e Aquarium nunca entram na transmissão, para não dar retorno.</p>
-      <div className="menu-slider">
-        <label htmlFor="menu-send-volume">
-          <span>Volume enviado</span>
-          <span>{Math.round(settings.sendVolume * 100)}%</span>
-        </label>
-        <input
-          id="menu-send-volume"
-          type="range"
-          min={0}
-          max={150}
-          step={5}
-          value={Math.round(settings.sendVolume * 100)}
-          disabled={settings.audioMode === 'none'}
-          onChange={(e) => updateSettings({ sendVolume: Number(e.target.value) / 100 })}
-        />
-      </div>
-      <MenuSeparator />
-      <MenuItem onClick={onChangeSource}>Trocar tela ou janela</MenuItem>
-      <MenuItem
-        onClick={async () => {
-          if (await copyText(await diagnostics())) setCopied(true)
-        }}
-      >
-        {copied ? 'Diagnóstico copiado' : 'Copiar diagnóstico'}
-      </MenuItem>
-      <MenuItem
-        danger
-        onClick={() => {
-          session.stopStreaming()
-          onClose()
-        }}
-      >
-        Parar de transmitir
-      </MenuItem>
-    </>
-  )
-}
-
-// ---------- barra inferior ----------
-
-function useIdle(ms: number): boolean {
-  const [idle, setIdle] = useState(false)
-  useEffect(() => {
-    let timer = setTimeout(() => setIdle(true), ms)
-    const wake = (): void => {
-      setIdle(false)
-      clearTimeout(timer)
-      timer = setTimeout(() => setIdle(true), ms)
-    }
-    window.addEventListener('pointermove', wake)
-    window.addEventListener('keydown', wake)
-    return () => {
-      clearTimeout(timer)
-      window.removeEventListener('pointermove', wake)
-      window.removeEventListener('keydown', wake)
-    }
-  }, [ms])
-  return idle
-}
-
-function Dock({
-  inRoom,
-  streaming,
-  masterMuted,
-  layout,
-  onStream,
-  onToggleMute,
-  onToggleLayout,
-  onSettings,
-  onLeave
-}: {
-  inRoom: boolean
-  streaming: boolean
-  masterMuted: boolean
-  layout: 'lado' | 'foco'
-  onStream: (at: MenuPosition, anchor: HTMLElement) => void
-  onToggleMute: () => void
-  onToggleLayout: () => void
-  onSettings: () => void
-  onLeave: () => void
-}): React.JSX.Element {
-  const idle = useIdle(3000)
-  const [quality, setQuality] = useState(false)
-  const qualityButton = useRef<HTMLButtonElement>(null)
-
-  return (
-    <div className={`dock ${idle && inRoom && !quality ? 'idle' : ''}`} role="toolbar" aria-label="Controles da sala">
-      <button
-        className={`dock-btn ${streaming ? 'live' : 'primary'}`}
-        disabled={!inRoom}
-        onClick={(e) => {
-          const r = e.currentTarget.getBoundingClientRect()
-          onStream({ x: r.left, y: r.top - 8 - 420 }, e.currentTarget)
-        }}
-      >
-        <IconScreen />
-        {streaming ? 'Transmitindo' : 'Transmitir'}
-      </button>
-      <button className="dock-btn" aria-pressed={masterMuted} onClick={onToggleMute}>
-        {masterMuted ? <IconSpeakerOff /> : <IconSpeaker />}
-        {masterMuted ? 'Sem som' : 'Som'}
-      </button>
-      <div className="dock-anchor">
-        <button ref={qualityButton} className="dock-btn" aria-expanded={quality} onClick={() => setQuality((v) => !v)}>
-          <IconSliders />
-          Qualidade
-        </button>
-        {quality && <QualityPopover toggle={qualityButton} onClose={() => setQuality(false)} />}
-      </div>
-      <button className="dock-btn" disabled={!inRoom} onClick={onToggleLayout}>
-        {layout === 'lado' ? <IconSideBySide /> : <IconFocus />}
-        {layout === 'lado' ? 'Lado a lado' : 'Foco'}
-      </button>
-      <button className="dock-btn" onClick={onSettings}>
-        <IconGear />
-        Configurações
-      </button>
-      <div className="dock-sep" />
-      <button className="dock-btn outline" disabled={!inRoom} onClick={onLeave}>
-        Sair da sala
-      </button>
-    </div>
-  )
-}
-
-function QualityPopover({
-  toggle,
-  onClose
-}: {
-  toggle: React.RefObject<HTMLButtonElement | null>
-  onClose: () => void
-}): React.JSX.Element {
-  const settings = useSettings()
-  const ref = useRef<HTMLDivElement>(null)
-  const close = useCallback(onClose, [onClose])
-  useDismiss(ref, close, true, toggle)
-  return (
-    <div ref={ref} className="popover" role="dialog" aria-label="Qualidade da transmissão">
-      <div className="field">
-        <label htmlFor="q-preset">Qualidade</label>
-        <select
-          id="q-preset"
-          value={settings.presetId}
-          onChange={(e) => {
-            const id = e.target.value as PresetId
-            updateSettings({ presetId: id, priority: PRESETS[id].defaultPriority })
-          }}
-        >
-          {Object.values(PRESETS).map((p) => (
-            <option key={p.id} value={p.id}>
-              {p.label} · {p.description}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="field">
-        <label htmlFor="q-priority">Quando faltar banda</label>
-        <select id="q-priority" value={settings.priority} onChange={(e) => updateSettings({ priority: e.target.value as Priority })}>
-          {(Object.keys(PRIORITIES) as Priority[]).map((id) => (
-            <option key={id} value={id}>
-              {PRIORITIES[id].label}: {PRIORITIES[id].description}
-            </option>
-          ))}
-        </select>
-      </div>
-      <BandwidthPicker />
-    </div>
-  )
-}
-
-export function BandwidthPicker(): React.JSX.Element {
-  const settings = useSettings()
-  const options: { value: 'auto' | number; label: string }[] = [
-    { value: 'auto', label: 'Automático' },
-    { value: 6, label: '6 Mbps' },
-    { value: 10, label: '10 Mbps' },
-    { value: 16, label: '16 Mbps' }
-  ]
-  return (
-    <div className="field">
-      <span id="bw-label" className="field-label">
-        Limite de banda por pessoa assistindo
-      </span>
-      <div role="radiogroup" aria-labelledby="bw-label" className="pills">
-        {options.map((o) => (
-          <button
-            key={o.label}
-            role="radio"
-            aria-checked={settings.bandwidth === o.value}
-            className={`pill ${settings.bandwidth === o.value ? 'on' : ''}`}
-            onClick={() => updateSettings({ bandwidth: o.value })}
-          >
-            {o.label}
-          </button>
-        ))}
-      </div>
-      {settings.bandwidth === 'auto' && (
-        <span className="field-hint">No automático, o Aquarium baixa o teto quando a rede começa a atrasar, para evitar travamentos.</span>
-      )}
-    </div>
-  )
-}
-
-// ---------- pessoas ----------
-
-function PeopleDrawer({
-  client,
-  toggle,
-  onClose
-}: {
-  client: RoomClient
-  toggle: React.RefObject<HTMLButtonElement | null>
-  onClose: () => void
-}): React.JSX.Element {
-  const ref = useRef<HTMLDivElement>(null)
-  useDismiss(ref, onClose, true, toggle)
-  const groups = [
-    ...client.state.rooms.map((r) => ({ title: r.name, members: client.state.members.filter((m) => m.roomId === r.id) })),
-    { title: 'Fora das salas', members: client.state.members.filter((m) => m.roomId === null) }
-  ].filter((g) => g.members.length > 0)
-
-  return (
-    <aside ref={ref} className="drawer" aria-label="Pessoas do grupo">
-      <h2>Online · {client.state.members.length}</h2>
-      {groups.map((g) => (
-        <div key={g.title} className="drawer-group">
-          <span className="drawer-title">{g.title}</span>
-          {g.members.map((m) => (
-            <div key={m.peerId} className="drawer-person">
-              <Avatar peerId={m.peerId} name={m.name} size={30} />
-              <span className="drawer-person-text">
-                <span>
-                  {m.name}
-                  {m.peerId === client.peerId ? ' (você)' : ''}
-                </span>
-                {m.streaming && <span className="live-text">transmitindo {m.streamLabel ?? ''}</span>}
-              </span>
-            </div>
-          ))}
-        </div>
-      ))}
-    </aside>
   )
 }

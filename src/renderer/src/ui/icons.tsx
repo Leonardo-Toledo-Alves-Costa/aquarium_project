@@ -64,12 +64,6 @@ export const IconSideBySide = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
-export const IconFocus = (p: IconProps): React.JSX.Element => (
-  <Svg {...p}>
-    <rect x="3" y="4" width="18" height="11" rx="1.5" />
-    <path d="M4 19h4M10 19h4M16 19h4" />
-  </Svg>
-)
 
 export const IconGear = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
@@ -78,13 +72,6 @@ export const IconGear = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
-export const IconUsers = (p: IconProps): React.JSX.Element => (
-  <Svg {...p}>
-    <circle cx="9" cy="8" r="3.5" />
-    <path d="M2.5 20a6.5 6.5 0 0 1 13 0" />
-    <path d="M16 4.5a3.5 3.5 0 0 1 0 7M18 14a6 6 0 0 1 3.5 6" />
-  </Svg>
-)
 
 export const IconDownload = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
@@ -99,11 +86,6 @@ export const IconEye = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
-export const IconChevronDown = (p: IconProps): React.JSX.Element => (
-  <Svg {...p}>
-    <path d="m6 9 6 6 6-6" />
-  </Svg>
-)
 
 export const IconPlus = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
@@ -125,15 +107,67 @@ export const IconMore = (p: IconProps): React.JSX.Element => (
   </Svg>
 )
 
-export const IconSignal = (p: IconProps): React.JSX.Element => (
-  <Svg {...p}>
-    <path d="M4 18v-2M9 18v-6M14 18v-10M19 18V4" />
-  </Svg>
-)
 
 export const IconLock = (p: IconProps): React.JSX.Element => (
   <Svg {...p}>
     <rect x="5" y="11" width="14" height="10" rx="2" />
     <path d="M8 11V8a4 4 0 0 1 8 0v3" />
+  </Svg>
+)
+
+export const IconSidebar = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <rect x="3" y="4" width="18" height="16" rx="2" />
+    <path d="M9 4v16" />
+  </Svg>
+)
+
+export const IconLeave = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3M10 17l-5-5 5-5M5 12h11" />
+  </Svg>
+)
+
+export const IconSwap = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M4 8h13l-3-3M20 16H7l3 3" />
+  </Svg>
+)
+
+export const IconStop = ({ size = 20 }: IconProps): React.JSX.Element => (
+  <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <rect x="5" y="5" width="14" height="14" rx="2" />
+  </svg>
+)
+
+export const IconPlay = ({ size = 20 }: IconProps): React.JSX.Element => (
+  <svg aria-hidden="true" width={size} height={size} viewBox="0 0 24 24" fill="currentColor">
+    <path d="M7 5v14l12-7z" />
+  </svg>
+)
+
+export const IconZoomIn = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M20 20l-4-4M8 11h6M11 8v6" />
+  </Svg>
+)
+
+export const IconZoomOut = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M20 20l-4-4M8 11h6" />
+  </Svg>
+)
+
+export const IconFullscreen = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+  </Svg>
+)
+
+export const IconExitFullscreen = (p: IconProps): React.JSX.Element => (
+  <Svg {...p}>
+    <path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5" />
   </Svg>
 )
