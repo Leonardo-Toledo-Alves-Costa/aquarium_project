@@ -61,7 +61,8 @@ export function Palco({
   const me = client.me
   const roomId = me?.roomId ?? null
   const room = client.state.rooms.find((r) => r.id === roomId) ?? null
-  const roomMembers = client.state.members.filter((m) => roomId !== null && m.roomId === roomId)
+  // Quem caiu do servidor há pouco com o vídeo ainda chegando continua com a aba até voltar.
+  const roomMembers = [...client.state.members.filter((m) => roomId !== null && m.roomId === roomId), ...session.missingMembers]
   const tiles = buildTiles(session, roomMembers, client.peerId)
   const view = settings.view
   const active =

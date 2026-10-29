@@ -4,6 +4,7 @@
 // podem mudar o que enviam a qualquer momento sem combinar quem começa.
 
 import { errorInfo, logger } from '../log'
+import type { MemberInfo } from '../../../shared/rooms-protocol'
 import type { RoomClient } from '../signaling/rooms'
 import { BitrateGovernor, type BandwidthMode } from './governor'
 import { createPeerConnection, peerStatus, preferVideoCodecs, type PeerStatus } from './peer'
@@ -95,6 +96,8 @@ export class PeerLink {
   disconnectedSince = 0
   missingSince = 0
   iceRestarted = false
+  /** Como o servidor mostrava a pessoa da última vez (para manter a aba enquanto ela some). */
+  member?: MemberInfo
   senders: RTCRtpSender[] = []
   status: PeerStatus = 'aguardando'
   makingOffer = false
@@ -153,6 +156,11 @@ export class RoomSession {
 
   get roomId(): string | null {
     return this.client.me?.roomId ?? null
+  }
+
+  /** Quem sumiu do servidor há pouco mas continua com a ligação funcionando (ver MISSING_GRACE_MS). */
+  get missingMembers(): MemberInfo[] {
+    return [...this.links.values()].flatMap((l) => (l.missingSince && l.member ? [l.member] : []))
   }
 
   subscribe(listener: () => void): () => void {
@@ -295,6 +303,7 @@ export class RoomSession {
     }
     for (const [peerId, member] of others) {
       const link = this.links.get(peerId) ?? this.createLink(peerId, undefined, 'na sala')
+      link.member = member
       if (!member.streaming && link.iWatch) {
         log.info('parei de assistir: a pessoa parou de transmitir', { peer: peerId })
         link.iWatch = false
