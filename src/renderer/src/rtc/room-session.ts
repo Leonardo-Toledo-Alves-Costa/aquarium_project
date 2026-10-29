@@ -37,12 +37,30 @@ const STATS_LOG_MS = 30_000
 const GOVERNOR_LOG_MS = 10_000
 /** Erros de coleta de candidatos registrados por conexão (os servidores STUN geram muitos). */
 const MAX_CANDIDATE_ERRORS = 5
+/**
+ * Quem some da lista do servidor (queda da conexão dela com o servidor) mas continua com a ligação
+ * P2P funcionando fica por esse tempo: dá para ela perceber a queda e voltar sem o vídeo parar.
+ */
+const MISSING_GRACE_MS = 30_000
+/** Uma negociação que não termina nesse tempo perdeu um sinal: a conexão é refeita. */
+const NEGOTIATION_TIMEOUT_MS = 6_000
+/** Desconectada por esse tempo, tento reiniciar o ICE antes de desistir da conexão. */
+const ICE_RESTART_AFTER_MS = 4_000
+/** Uma mesma pessoa tem a conexão refeita no máximo uma vez nesse intervalo. */
+const RECOVER_MIN_MS = 10_000
+/** Pedi para assistir e o vídeo não veio: repito o pedido depois desse tempo (pode ter se perdido). */
+const WATCH_RETRY_MS = 3_000
 
 /** Tipo e protocolo de um candidato ICE, tirados da linha "candidate:" (o endereço fica de fora). */
 function candidateKind(candidate: string): string {
   const typ = / typ (\w+)/.exec(candidate)?.[1] ?? '?'
   const protocol = /^(?:a=)?candidate:\S+ \d+ (\w+)/i.exec(candidate)?.[1]?.toLowerCase() ?? '?'
   return `${typ}/${protocol}`
+}
+
+/** O que chega, se ainda tem vídeo passando. */
+function liveVideo(stream: MediaStream | null): MediaStream | null {
+  return stream?.getVideoTracks().some((t) => t.readyState === 'live') ? stream : null
 }
 
 function countInto(counts: Record<string, number>, key: string): void {
@@ -67,7 +85,16 @@ export class PeerLink {
   iWatch = false
   /** Esta pessoa pediu para me assistir. */
   theyWatch = false
+  /** O que chega desta pessoa, assistindo ou não; `remote` só aponta para cá enquanto eu assisto. */
+  incoming: MediaStream | null = null
   remote: MediaStream | null = null
+  /** Quando o último pedido de assistir (ou de parar) foi enviado. */
+  watchSentAt = 0
+  /** Desde quando a negociação está aberta, a conexão está desconectada ou a pessoa sumiu do servidor (0: não está). */
+  unstableSince = 0
+  disconnectedSince = 0
+  missingSince = 0
+  iceRestarted = false
   senders: RTCRtpSender[] = []
   status: PeerStatus = 'aguardando'
   makingOffer = false
@@ -108,6 +135,9 @@ export class RoomSession {
   private unsubscribe: (() => void)[] = []
   private governorTimer: ReturnType<typeof setInterval>
   private statsTimer: ReturnType<typeof setInterval>
+  private healthTimer: ReturnType<typeof setInterval>
+  /** Quando cada pessoa teve a conexão refeita pela última vez. */
+  private recoveredAt = new Map<string, number>()
 
   constructor(
     private readonly client: RoomClient,
@@ -117,6 +147,7 @@ export class RoomSession {
     this.unsubscribe.push(client.onSignal((from, payload) => this.onSignal(from, payload as Signal)))
     this.governorTimer = setInterval(() => this.governBitrate(), 2000)
     this.statsTimer = setInterval(() => void this.logStats(), STATS_LOG_MS)
+    this.healthTimer = setInterval(() => this.checkHealth(), 1000)
     this.sync()
   }
 
@@ -188,9 +219,15 @@ export class RoomSession {
     log.info(on ? 'pedi para assistir' : 'parei de assistir', { peer: peerId, link: link?.id, status: link?.status })
     if (!link || link.iWatch === on) return
     link.iWatch = on
-    if (!on) link.remote = null
-    this.signal(peerId, { k: 'watch', on })
+    // O vídeo pode já estar chegando (um "parar" anterior que se perdeu): aproveito sem esperar uma trilha nova.
+    link.remote = on ? liveVideo(link.incoming) : null
+    this.sendWatch(link, on)
     this.emit()
+  }
+
+  private sendWatch(link: PeerLink, on: boolean): void {
+    link.watchSentAt = Date.now()
+    this.signal(link.peerId, { k: 'watch', on })
   }
 
   close(): void {
@@ -198,6 +235,7 @@ export class RoomSession {
     this.stopStreaming()
     clearInterval(this.governorTimer)
     clearInterval(this.statsTimer)
+    clearInterval(this.healthTimer)
     for (const off of this.unsubscribe) off()
     for (const link of this.links.values()) link.pc.close()
     this.links.clear()
@@ -235,12 +273,25 @@ export class RoomSession {
       this.connections = this.client.connections
     }
 
+    const now = Date.now()
     for (const [peerId, link] of this.links) {
-      if (!others.has(peerId)) {
-        log.info('conexão fechada: a pessoa não está mais na sala', { peer: peerId, link: link.id, status: link.status })
-        link.pc.close()
-        this.links.delete(peerId)
+      if (others.has(peerId)) {
+        if (link.missingSince) log.info('a pessoa voltou ao servidor; conexão mantida', { ...this.who(link), missingMs: now - link.missingSince })
+        link.missingSince = 0
+        continue
       }
+      // Sumiu do servidor (não mudou de sala) com o vídeo ainda passando: espera ela voltar.
+      const gone = roomId !== null && !this.client.state.members.some((m) => m.peerId === peerId)
+      if (gone && link.pc.connectionState === 'connected' && (!link.missingSince || now - link.missingSince < MISSING_GRACE_MS)) {
+        if (!link.missingSince) {
+          link.missingSince = now
+          log.info('a pessoa sumiu do servidor; mantenho a conexão por um tempo', { ...this.who(link), graceMs: MISSING_GRACE_MS })
+        }
+        continue
+      }
+      log.info('conexão fechada: a pessoa não está mais na sala', { peer: peerId, link: link.id, status: link.status, missingMs: link.missingSince ? now - link.missingSince : undefined })
+      link.pc.close()
+      this.links.delete(peerId)
     }
     for (const [peerId, member] of others) {
       const link = this.links.get(peerId) ?? this.createLink(peerId, undefined, 'na sala')
@@ -274,7 +325,95 @@ export class RoomSession {
     if (link && !link.iWatch) {
       log.info('voltando a assistir sozinho', { peer: peerId, link: link.id })
       link.iWatch = true
-      this.signal(peerId, { k: 'watch', on: true })
+      link.remote = liveVideo(link.incoming)
+      this.sendWatch(link, true)
+    }
+  }
+
+  // ---------- conexões que se recuperam sozinhas ----------
+
+  /** Uma vez por segundo: refaz o que travou e repete pedidos que podem ter se perdido. */
+  private checkHealth(): void {
+    const now = Date.now()
+    let changed = false
+    for (const link of [...this.links.values()]) {
+      const { pc } = link
+      // Quem sumiu do servidor e não voltou a tempo (ou cuja ligação caiu nesse meio-tempo).
+      if (link.missingSince && (now - link.missingSince >= MISSING_GRACE_MS || pc.connectionState !== 'connected')) {
+        this.sync()
+        return
+      }
+      if (pc.signalingState === 'stable') link.unstableSince = 0
+      else if (!link.unstableSince) link.unstableSince = now
+      else if (now - link.unstableSince > NEGOTIATION_TIMEOUT_MS) {
+        changed = this.recover(link, 'negociação parada') || changed
+        continue
+      }
+      const state = pc.connectionState
+      if (state === 'failed' || state === 'closed') {
+        changed = this.recover(link, state === 'failed' ? 'conexão falhou' : 'conexão fechada') || changed
+        continue
+      }
+      if (state === 'disconnected') {
+        link.disconnectedSince ||= now
+        if (!link.iceRestarted && now - link.disconnectedSince > ICE_RESTART_AFTER_MS) {
+          link.iceRestarted = true
+          log.warn('conexão instável; reiniciando o ICE', this.who(link))
+          pc.restartIce()
+        }
+      } else {
+        link.disconnectedSince = 0
+        if (state === 'connected') link.iceRestarted = false
+      }
+      this.retryWatch(link, now)
+    }
+    if (changed) this.emit()
+  }
+
+  /**
+   * Refaz a conexão com uma pessoa: o "hello" da nova faz o outro lado trocar a dele também
+   * (replaceLink), e cada lado volta a assistir quem assistia.
+   */
+  private recover(link: PeerLink, why: string): boolean {
+    const { peerId } = link
+    if (this.links.get(peerId) !== link) return false
+    const member = this.client.state.members.find((m) => m.peerId === peerId)
+    if (!member || member.roomId === null || member.roomId !== this.roomId) {
+      this.sync()
+      return false
+    }
+    const now = Date.now()
+    if (now - (this.recoveredAt.get(peerId) ?? 0) < RECOVER_MIN_MS) return false
+    this.recoveredAt.set(peerId, now)
+    log.warn('refazendo a conexão', {
+      ...this.who(link),
+      why,
+      connection: link.pc.connectionState,
+      signaling: link.pc.signalingState,
+      watching: link.iWatch,
+      watched: link.theyWatch
+    })
+    link.pc.close()
+    this.links.delete(peerId)
+    const fresh = this.createLink(peerId, undefined, why)
+    this.rewatch(fresh, member.streaming)
+    return true
+  }
+
+  /**
+   * O pedido de assistir vai uma vez só e pode se perder (ou chegar fora de ordem): enquanto o que
+   * chega não bate com o que eu quero, repito o pedido. Do outro lado, repetir não muda nada.
+   */
+  private retryWatch(link: PeerLink, now: number): void {
+    if (now - link.watchSentAt < WATCH_RETRY_MS || link.pc.signalingState !== 'stable') return
+    const streaming = !!this.client.state.members.find((m) => m.peerId === link.peerId)?.streaming
+    const receiving = !!liveVideo(link.incoming)
+    if (link.iWatch && streaming && !receiving && link.pc.connectionState !== 'connecting') {
+      log.info('o vídeo não veio; repito o pedido para assistir', this.who(link))
+      this.sendWatch(link, true)
+    } else if (!link.iWatch && receiving) {
+      log.info('o vídeo continua vindo sem eu assistir; repito o pedido para parar', this.who(link))
+      this.sendWatch(link, false)
     }
   }
 
@@ -342,10 +481,14 @@ export class RoomSession {
       const stream = event.streams[0] ?? new MediaStream([event.track])
       log.info('trilha recebida', { ...this.who(link), kind: event.track.kind, watching: link.iWatch })
       event.track.addEventListener('ended', () => log.info('trilha recebida terminou', { ...this.who(link), kind: event.track.kind }))
+      link.incoming = stream
       link.remote = link.iWatch ? stream : null
       stream.addEventListener('removetrack', (e) => {
         log.info('trilha removida', { ...this.who(link), kind: e.track.kind })
-        if (stream.getTracks().length === 0 && link.remote === stream) link.remote = null
+        if (stream.getTracks().length === 0) {
+          if (link.remote === stream) link.remote = null
+          if (link.incoming === stream) link.incoming = null
+        }
         this.emit()
       })
       this.emit()

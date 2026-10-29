@@ -215,21 +215,34 @@ export class GroupRoom extends DurableObject<Env> {
       return this.reject(ws, 'auth', 'Código do grupo incorreto', CLOSE.auth)
     }
 
-    // Mesmo aparelho reconectando: a conexão antiga sai.
+    // Mesmo aparelho reconectando: a conexão antiga sai, e a nova fica na sala em que ela estava.
+    let previous: Connection | undefined
     for (const other of this.ctx.getWebSockets()) {
       if (other === ws) continue
       const otherConnection = other.deserializeAttachment() as Connection
       if (otherConnection.authed && otherConnection.peerId === message.peerId) {
         log('replaced', otherConnection, { upMs: otherConnection.openedAt ? Date.now() - otherConnection.openedAt : undefined })
+        previous = otherConnection
+        // Fora da lista já, para a pessoa não aparecer duas vezes até o close chegar.
+        other.serializeAttachment({ ...otherConnection, authed: false })
         other.close(CLOSE.replaced, 'Conectado em outro lugar')
       }
+    }
+
+    // O app 0.5.1+ diz onde estava; o anterior não diz, e então vale o da conexão antiga.
+    const back = 'roomId' in message ? message : previous
+    const rooms = await this.loadRooms()
+    if (typeof back?.roomId === 'string' && rooms.some((r) => r.id === back.roomId)) {
+      connection.roomId = back.roomId
+      connection.streaming = back.streaming === true
+      connection.streamLabel = connection.streaming ? (cleanText(back.streamLabel, LIMITS.streamLabelLength) ?? undefined) : undefined
     }
 
     connection.authed = true
     connection.peerId = message.peerId
     connection.name = name
     ws.serializeAttachment(connection)
-    log('hello', connection, { v: message.v })
+    log('hello', connection, { v: message.v, roomId: connection.roomId, streaming: connection.streaming, inherited: !!previous })
     this.send(ws, { t: 'welcome', peerId: message.peerId, state: await this.state() })
     this.broadcastState(undefined, ws)
   }

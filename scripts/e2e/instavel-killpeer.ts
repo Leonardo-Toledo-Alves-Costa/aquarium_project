@@ -1,7 +1,7 @@
 // Persona instavel: a ligação P2P morre de um lado só (NAT esqueceu a rota), o servidor segue normal.
 // Esperado: em até 45 s quem assiste volta a receber vídeo (restartIce ou ligação nova).
 // Roda os dois casos (morre do lado de quem assiste / de quem transmite) com pessoas novas.
-import { check, closeAll, finish, fail, isLive, killPeer, makeStream, newGroup, note, person, sleep, until, type Person } from './lib'
+import { check, closeAll, fps, finish, fail, isLive, killPeer, makeStream, newGroup, note, person, sleep, until, type Person } from './lib'
 import { frameMeter, verboseLogs } from './instavel-util'
 
 const RECOVER_MS = 45_000
@@ -26,7 +26,9 @@ async function scenario(label: string, killSide: 'quem assiste' | 'quem transmit
   if (killSide === 'quem assiste') killPeer(B, A)
   else killPeer(A, B)
   const t = Date.now()
-  const back = await until(() => meter.gap() < 500 && Date.now() - t > 1500, RECOVER_MS)
+  // Voltou: a ligação de B com A tem vídeo de novo e os quadros estão chegando (o buraco aparece no detalhe).
+  const back =
+    (await until(() => Date.now() - t > 1500 && !!B.session.links.get(A.client.peerId)?.remote, RECOVER_MS)) && (await fps(B, A)) > 5
   const bLink = B.session.links.get(A.client.peerId)
   const aLink = A.session.links.get(B.client.peerId)
   note(

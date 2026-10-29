@@ -25,6 +25,10 @@ export interface RoomClientOptions {
 type SignalHandler = (from: string, payload: unknown) => void
 
 const RETRY_DELAYS = [500, 1000, 2000, 5000, 10000]
+/** Sem nada do servidor por esse tempo, mando um ping (o servidor responde "pong" sem acordar). */
+const PING_MS = 10_000
+/** Sem nada do servidor por esse tempo, a conexão está morta mesmo que o socket diga "aberto". */
+const DEAD_MS = 20_000
 
 export class RoomClient {
   state: GroupState = { rooms: [], members: [] }
@@ -38,8 +42,11 @@ export class RoomClient {
   private listeners = new Set<() => void>()
   private signalHandlers = new Set<SignalHandler>()
   private retry = 0
-  private pingTimer?: ReturnType<typeof setInterval>
+  private heartbeatTimer: ReturnType<typeof setInterval>
   private retryTimer?: ReturnType<typeof setTimeout>
+  /** Última mensagem do servidor (inclusive "pong") e último ping enviado. */
+  private lastSeen = 0
+  private pingSentAt = 0
   private closed = false
   private roomId: string | null = null
   private streaming: { active: boolean; label?: string } = { active: false }
@@ -51,6 +58,7 @@ export class RoomClient {
   private inbox: Promise<void> = Promise.resolve()
 
   constructor(private readonly options: RoomClientOptions) {
+    this.heartbeatTimer = setInterval(() => this.heartbeat(), 1000)
     this.connect()
   }
 
@@ -117,9 +125,43 @@ export class RoomClient {
   close(): void {
     log.info('desconectando do servidor (fechado pelo app)')
     this.closed = true
-    clearInterval(this.pingTimer)
+    clearInterval(this.heartbeatTimer)
     clearTimeout(this.retryTimer)
     this.ws?.close()
+  }
+
+  /**
+   * Percebe uma conexão meio morta (Wi-Fi trocando de rede, volta da hibernação): o socket continua
+   * "aberto", mas nada chega. Sem isso, o close só viria minutos depois, e para os outros eu já teria saído.
+   */
+  private heartbeat(): void {
+    const ws = this.ws
+    if (this.status !== 'conectado' || !ws || ws.readyState !== WebSocket.OPEN) return
+    const now = Date.now()
+    if (now - this.lastSeen > DEAD_MS) {
+      log.warn('servidor sem resposta; reconectando', { silentMs: now - this.lastSeen, pingMs: this.pingSentAt ? now - this.pingSentAt : null })
+      // Não espero o close desse socket: ele pode demorar ou nunca chegar.
+      this.ws = undefined
+      try {
+        ws.close()
+      } catch {
+        // Já fechado.
+      }
+      this.logUnsent()
+      this.reconnect()
+    } else if (now - this.lastSeen >= PING_MS && now - this.pingSentAt >= PING_MS) {
+      this.pingSentAt = now
+      ws.send('ping')
+    }
+  }
+
+  private reconnect(): void {
+    this.status = 'reconectando'
+    this.emit()
+    const delay = RETRY_DELAYS[Math.min(this.retry++, RETRY_DELAYS.length - 1)]
+    log.info('nova tentativa agendada', { delayMs: delay, attempt: this.retry })
+    clearTimeout(this.retryTimer)
+    this.retryTimer = setTimeout(() => this.connect(), delay)
   }
 
   private connect(): void {
@@ -132,6 +174,12 @@ export class RoomClient {
     let welcomed = this.connections
 
     ws.addEventListener('open', () => {
+      // Um socket que eu já abandonei abrindo atrasado derrubaria o atual (o servidor troca pelo mais novo).
+      if (this.ws !== ws) {
+        log.info('websocket antigo abriu atrasado; fechado')
+        ws.close()
+        return
+      }
       openedAt = Date.now()
       log.info('websocket aberto')
       ws.send(
@@ -140,14 +188,17 @@ export class RoomClient {
           v: PROTOCOL_VERSION,
           auth: this.options.keys.auth,
           peerId: this.options.peerId,
-          name: this.options.name
+          name: this.options.name,
+          roomId: this.roomId,
+          streaming: this.streaming.active,
+          streamLabel: this.streaming.label
         } satisfies ClientMessage)
       )
-      clearInterval(this.pingTimer)
-      this.pingTimer = setInterval(() => ws.readyState === WebSocket.OPEN && ws.send('ping'), 25_000)
     })
 
     ws.addEventListener('message', (event) => {
+      if (this.ws !== ws) return
+      this.lastSeen = Date.now()
       if (event.data === 'pong') return
       let message: ServerMessage
       try {
@@ -161,7 +212,6 @@ export class RoomClient {
     ws.addEventListener('error', () => log.warn('erro no websocket'))
 
     ws.addEventListener('close', (event) => {
-      clearInterval(this.pingTimer)
       const details = {
         code: event.code,
         reason: event.reason,
@@ -184,11 +234,7 @@ export class RoomClient {
         this.emit()
         return
       }
-      this.status = 'reconectando'
-      this.emit()
-      const delay = RETRY_DELAYS[Math.min(this.retry++, RETRY_DELAYS.length - 1)]
-      log.info('nova tentativa agendada', { delayMs: delay, attempt: this.retry })
-      this.retryTimer = setTimeout(() => this.connect(), delay)
+      this.reconnect()
     })
   }
 
@@ -208,13 +254,17 @@ export class RoomClient {
           rejoin: this.roomId,
           streaming: this.streaming.active
         })
+        this.pingSentAt = 0
         this.setState(message.state)
         // Volta para a sala e o estado em que estava (depois de uma queda, ou pedidos feitos antes de conectar).
-        if (this.roomId !== null) {
-          this.send({ t: 'join', roomId: this.roomId })
-          if (this.streaming.active) this.send({ t: 'stream', ...this.streaming })
-          this.rejoining = true
-          this.setState(this.state)
+        // O servidor 0.5.1 já me pôs de volta pelo hello; os anteriores precisam do join.
+        if (this.me?.roomId !== this.roomId || !!this.me?.streaming !== this.streaming.active) {
+          if (this.me?.roomId !== this.roomId) this.send({ t: 'join', roomId: this.roomId })
+          if (this.roomId !== null && !!this.me?.streaming !== this.streaming.active) this.send({ t: 'stream', ...this.streaming })
+          if (this.roomId !== null) {
+            this.rejoining = true
+            this.setState(this.state)
+          }
         }
         this.emit()
         break

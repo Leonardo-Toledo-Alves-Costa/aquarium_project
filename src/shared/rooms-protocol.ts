@@ -44,7 +44,17 @@ export interface GroupState {
 }
 
 export type ClientMessage =
-  | { t: 'hello'; v: number; auth: string; peerId: string; name: string }
+  | {
+      t: 'hello'
+      v: number
+      auth: string
+      peerId: string
+      name: string
+      /** Onde eu estava antes de uma queda (0.5.1+): o servidor já me põe de volta, sem eu sumir da sala. */
+      roomId?: string | null
+      streaming?: boolean
+      streamLabel?: string
+    }
   | { t: 'join'; roomId: string | null }
   | { t: 'stream'; active: boolean; label?: string }
   | { t: 'signal'; to: string; data: string }
