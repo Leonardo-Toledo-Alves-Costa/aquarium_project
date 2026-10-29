@@ -22,7 +22,7 @@ export interface RoomClientOptions {
   name: string
 }
 
-type SignalHandler = (from: string, payload: unknown) => void | Promise<void>
+type SignalHandler = (from: string, payload: unknown) => void
 
 const RETRY_DELAYS = [500, 1000, 2000, 5000, 10000]
 /** Sem nada do servidor por esse tempo, mando um ping (o servidor responde "pong" sem acordar). */
@@ -284,9 +284,8 @@ export class RoomClient {
         this.inbox = this.inbox.then(async () => {
           const payload = await this.decrypt(message.from, message.data)
           if (payload === undefined) return
-          // Um sinal só depois do anterior terminar: um candidato ICE aplicado antes da resposta que o
-          // precede terminar de entrar seria recusado e perdido.
-          for (const handler of this.signalHandlers) await handler(message.from, payload)
+          // Entregues na ordem de chegada; cada conexão trata os seus em fila (RoomSession.onSignal).
+          for (const handler of this.signalHandlers) handler(message.from, payload)
         }).catch((err) => log.warn('falha ao tratar um sinal', { from: message.from, error: errorInfo(err) }))
         break
       case 'left':

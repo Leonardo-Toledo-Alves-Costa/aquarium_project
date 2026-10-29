@@ -8,7 +8,7 @@ import type { MemberInfo } from '../../../shared/rooms-protocol'
 import type { RoomClient } from '../signaling/rooms'
 import { BitrateGovernor, type BandwidthMode } from './governor'
 import { createPeerConnection, peerStatus, preferVideoCodecs, type PeerStatus } from './peer'
-import { CODECS, PRIORITIES, type StreamSettings } from './presets'
+import { CODECS, PRIORITIES, type CodecChoice, type StreamSettings } from './presets'
 import { withBitrateHints, withMusicAudio } from './sdp'
 import { currentRoute, StatsSampler } from './stats'
 
@@ -104,6 +104,10 @@ export class PeerLink {
   member?: MemberInfo
   /** Transceptores que eu uso para enviar, um por tipo: reaproveitados a cada transmissão nova. */
   sendTransceivers: Partial<Record<string, RTCRtpTransceiver>> = {}
+  /** Pediram para me assistir durante uma negociação: o envio começa quando ela terminar (ver attach). */
+  attachPending = false
+  /** Codec preferido já aplicado ao transceptor de vídeo de envio. */
+  sendCodec?: CodecChoice
   /** Conferência do envio de vídeo: desde quando parece parado e quando a trilha foi religada. */
   sendCheck = { at: 0, stalledSince: 0, refedAt: 0 }
   senders: RTCRtpSender[] = []
@@ -116,6 +120,10 @@ export class PeerLink {
   localCandidates: Record<string, number> = {}
   remoteCandidates: Record<string, number> = {}
   candidateErrors = 0
+  /** Candidatos ICE que chegaram antes da descrição remota; entram assim que ela chega. */
+  earlyCandidates: RTCIceCandidateInit[] = []
+  /** Fila dos sinais desta conexão (ver onSignal). */
+  signals: Promise<void> = Promise.resolve()
   governorLoggedAt = 0
   localUfrag?: string
   remoteUfrag?: string
@@ -544,6 +552,8 @@ export class RoomSession {
       if (pc.signalingState === 'stable') {
         this.noteUfrag(link, 'local', pc.currentLocalDescription)
         this.noteUfrag(link, 'remote', pc.currentRemoteDescription)
+        // Fora deste evento: o "stable" de uma oferta desfeita numa colisão chega no meio da operação.
+        if (link.attachPending) setTimeout(() => this.attachWhenIdle(link), 0)
       }
     })
     pc.addEventListener('connectionstatechange', () => {
@@ -663,7 +673,8 @@ export class RoomSession {
     this.client.sendSignal(to, { ...payload, lid: link?.id, to: link?.remoteId })
   }
 
-  private async onSignal(from: string, signal: Signal): Promise<void> {
+  /** Decide a que conexão o sinal pertence (na ordem de chegada) e o põe na fila dela. */
+  private onSignal(from: string, signal: Signal): void {
     let link = this.links.get(from)
     if (!link) {
       const member = this.client.state.members.find((m) => m.peerId === from)
@@ -679,8 +690,16 @@ export class RoomSession {
       if (!signal.to && link.remoteId && link.remoteId !== signal.lid) link = this.replaceLink(link, signal.lid)
       link.remoteId = signal.lid
     }
-    const { pc } = link
+    // Um sinal só depois do anterior da mesma conexão terminar: um candidato ICE aplicado antes da
+    // resposta que o precede terminar de entrar seria recusado. A fila é por conexão porque uma
+    // operação de uma conexão fechada no meio nunca termina, e travaria os sinais de todo mundo.
+    const target = link
+    target.signals = target.signals.then(() => this.applySignal(target, from, signal))
+  }
 
+  private async applySignal(link: PeerLink, from: string, signal: Signal): Promise<void> {
+    const { pc } = link
+    if (pc.signalingState === 'closed') return
     try {
       if (signal.k === 'watch') {
         log.info(signal.on ? 'pediu para me assistir' : 'parou de me assistir', { ...this.who(link), streaming: !!this.local })
@@ -697,6 +716,7 @@ export class RoomSession {
         if (link.ignoreOffer) return
         log.info('descrição recebida', { ...this.who(link), type: signal.desc.type })
         await pc.setRemoteDescription(this.withHints(signal.desc))
+        await this.addEarlyCandidates(link)
         if (signal.desc.type === 'offer') {
           await pc.setLocalDescription()
           log.info('resposta enviada', this.who(link))
@@ -710,6 +730,11 @@ export class RoomSession {
           log.info('candidatos da outra pessoa', { ...this.who(link), candidates: link.remoteCandidates })
           link.remoteCandidates = {}
         }
+        // Chegou antes da descrição a que pertence (sinais atrasados ou fora de ordem): guardo para depois.
+        if (!pc.remoteDescription) {
+          if (signal.candidate) link.earlyCandidates.push(signal.candidate)
+          return
+        }
         try {
           await pc.addIceCandidate(signal.candidate ?? undefined)
         } catch (err) {
@@ -719,6 +744,21 @@ export class RoomSession {
     } catch (err) {
       log.warn('sinal com problema', { ...this.who(link), k: signal.k, signaling: pc.signalingState, error: errorInfo(err) })
     }
+  }
+
+  private async addEarlyCandidates(link: PeerLink): Promise<void> {
+    const early = link.earlyCandidates.splice(0)
+    if (early.length === 0) return
+    let refused = 0
+    for (const candidate of early) {
+      try {
+        await link.pc.addIceCandidate(candidate)
+      } catch {
+        // De uma oferta que foi ignorada ou substituída: não serve mais.
+        refused++
+      }
+    }
+    log.info('candidatos que chegaram antes da descrição aplicados', { ...this.who(link), count: early.length, refused })
   }
 
   /** As dicas de banda no SDP recebido valem para o que nós enviamos a essa pessoa. */
@@ -746,6 +786,15 @@ export class RoomSession {
    */
   private attach(link: PeerLink): void {
     if (!this.local || link.senders.length > 0 || link.pc.connectionState === 'closed') return
+    // Mexer num transceptor já usado com uma negociação aberta (um reinício de ICE, por exemplo) pode
+    // travar a janela inteira no Chromium. Espero a negociação fechar; o "stable" chama de novo.
+    const reusing = Object.values(link.sendTransceivers).some((t) => t && t.currentDirection !== 'stopped')
+    if (reusing && (link.pc.signalingState !== 'stable' || link.makingOffer)) {
+      if (!link.attachPending) log.info('envio espera a negociação em andamento terminar', this.who(link))
+      link.attachPending = true
+      return
+    }
+    link.attachPending = false
     const { stream } = this.local
     for (const track of stream.getTracks()) {
       const reused = link.sendTransceivers[track.kind]
@@ -764,12 +813,25 @@ export class RoomSession {
       }
       if (!transceiver) continue
       link.senders.push(transceiver.sender)
-      if (track.kind === 'video') preferVideoCodecs(transceiver, CODECS[this.settings.codec].mime)
+      // Preferência de codec só no transceptor novo, ou se o codec escolhido mudou e não há negociação
+      // em andamento: chamada de novo num transceptor em meio a uma negociação, ela trava a janela.
+      const codec = this.settings.codec
+      if (track.kind === 'video' && link.sendCodec !== codec && (transceiver !== reused || link.pc.signalingState === 'stable')) {
+        link.sendCodec = codec
+        preferVideoCodecs(transceiver, CODECS[codec].mime)
+      }
     }
+  }
+
+  private attachWhenIdle(link: PeerLink): void {
+    if (!link.attachPending || !link.theyWatch || this.links.get(link.peerId) !== link) return
+    if (link.pc.signalingState !== 'stable' || link.makingOffer) return
+    this.attach(link)
   }
 
   /** Para de enviar para essa pessoa; o transceptor fica para a próxima vez (como no removeTrack, só recebe). */
   private detach(link: PeerLink): void {
+    link.attachPending = false
     if (link.pc.connectionState === 'closed') return
     for (const sender of link.senders) {
       const transceiver = link.pc.getTransceivers().find((t) => t.sender === sender)
