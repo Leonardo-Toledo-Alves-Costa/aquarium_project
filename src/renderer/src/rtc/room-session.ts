@@ -51,6 +51,10 @@ const ICE_RESTART_AFTER_MS = 4_000
 const RECOVER_MIN_MS = 10_000
 /** Pedi para assistir e o vídeo não veio: repito o pedido depois desse tempo (pode ter se perdido). */
 const WATCH_RETRY_MS = 3_000
+/** O envio de vídeo fica zerado por esse tempo: a trilha é religada (e, se não resolver, a conexão refeita). */
+const SEND_STALL_MS = 4_000
+/** De quanto em quanto tempo confiro se o envio de vídeo está andando. */
+const SEND_CHECK_MS = 2_000
 
 /** Tipo e protocolo de um candidato ICE, tirados da linha "candidate:" (o endereço fica de fora). */
 function candidateKind(candidate: string): string {
@@ -98,6 +102,10 @@ export class PeerLink {
   iceRestarted = false
   /** Como o servidor mostrava a pessoa da última vez (para manter a aba enquanto ela some). */
   member?: MemberInfo
+  /** Transceptores que eu uso para enviar, um por tipo: reaproveitados a cada transmissão nova. */
+  sendTransceivers: Partial<Record<string, RTCRtpTransceiver>> = {}
+  /** Conferência do envio de vídeo: desde quando parece parado e quando a trilha foi religada. */
+  sendCheck = { at: 0, stalledSince: 0, refedAt: 0 }
   senders: RTCRtpSender[] = []
   status: PeerStatus = 'aguardando'
   makingOffer = false
@@ -252,6 +260,15 @@ export class RoomSession {
   // ---------- quem está na sala ----------
 
   private sync(): void {
+    // Recusado (o app foi aberto em outro lugar, versão antiga): sem transmitir nem ficar ligado a ninguém.
+    if (this.client.status === 'recusado') {
+      if (this.local) this.stopStreaming(false)
+      if (this.links.size > 0) log.info('conexão com o servidor recusada; fecho todas as conexões', { links: this.links.size })
+      for (const link of this.links.values()) link.pc.close()
+      this.links.clear()
+      this.emit()
+      return
+    }
     const me = this.client.me
     const roomId = me?.roomId ?? null
     const others = new Map(
@@ -288,8 +305,13 @@ export class RoomSession {
         link.missingSince = 0
         continue
       }
-      // Sumiu do servidor (não mudou de sala) com o vídeo ainda passando: espera ela voltar.
-      const gone = roomId !== null && !this.client.state.members.some((m) => m.peerId === peerId)
+      // Sumiu do servidor (não mudou de sala, nem fechou o app) com o vídeo ainda passando, e eu
+      // continuo na sala em que ela estava: espera ela voltar.
+      const gone =
+        roomId !== null &&
+        link.member?.roomId === roomId &&
+        !this.client.departed.has(peerId) &&
+        !this.client.state.members.some((m) => m.peerId === peerId)
       if (gone && link.pc.connectionState === 'connected' && (!link.missingSince || now - link.missingSince < MISSING_GRACE_MS)) {
         if (!link.missingSince) {
           link.missingSince = now
@@ -365,7 +387,8 @@ export class RoomSession {
       }
       if (state === 'disconnected') {
         link.disconnectedSince ||= now
-        if (!link.iceRestarted && now - link.disconnectedSince > ICE_RESTART_AFTER_MS) {
+        // Só um dos lados reinicia: os dois ao mesmo tempo podem deixar o envio de um deles parado.
+        if (!link.polite && !link.iceRestarted && now - link.disconnectedSince > ICE_RESTART_AFTER_MS) {
           link.iceRestarted = true
           log.warn('conexão instável; reiniciando o ICE', this.who(link))
           pc.restartIce()
@@ -375,8 +398,53 @@ export class RoomSession {
         if (state === 'connected') link.iceRestarted = false
       }
       this.retryWatch(link, now)
+      if (now - link.sendCheck.at >= SEND_CHECK_MS) void this.checkSending(link, now)
     }
     if (changed) this.emit()
+  }
+
+  /**
+   * Envio de vídeo desligado sem a conexão perceber (visto depois de dois reinícios de ICE cruzados,
+   * do lado que desfaz a oferta): a trilha está viva, mas o envio recomeçou do zero e não recebe
+   * quadro nenhum. Religar a trilha resolve; se não resolver, a conexão é refeita.
+   * Tela parada não confunde: a contagem de quadros da captura não volta a zero.
+   */
+  private async checkSending(link: PeerLink, now: number): Promise<void> {
+    const check = link.sendCheck
+    check.at = now
+    const video = link.senders.find((s) => s.track?.kind === 'video' && s.track.readyState === 'live')
+    if (!video || link.pc.connectionState !== 'connected' || link.pc.signalingState !== 'stable') {
+      check.stalledSince = 0
+      return
+    }
+    let source = 0
+    let encoded = 0
+    try {
+      for (const s of (await link.pc.getStats()).values()) {
+        if (s.type === 'media-source' && s.kind === 'video') source += s.frames ?? 0
+        if (s.type === 'outbound-rtp' && s.kind === 'video') encoded += s.framesEncoded ?? 0
+      }
+    } catch {
+      return
+    }
+    if (source > 0 || encoded > 0) {
+      check.stalledSince = 0
+      return
+    }
+    check.stalledSince ||= now
+    if (now - check.stalledSince <= SEND_STALL_MS) return
+    if (now - check.refedAt > RECOVER_MIN_MS) {
+      check.refedAt = now
+      check.stalledSince = 0
+      log.warn('o envio de vídeo parou; religando a trilha', this.who(link))
+      for (const sender of link.senders) {
+        const track = sender.track
+        sender
+          .replaceTrack(null)
+          .then(() => sender.replaceTrack(track))
+          .catch((err) => log.warn('não foi possível religar a trilha', { ...this.who(link), error: errorInfo(err) }))
+      }
+    } else if (this.recover(link, 'envio de vídeo parado')) this.emit()
   }
 
   /**
@@ -438,7 +506,6 @@ export class RoomSession {
       try {
         link.makingOffer = true
         await pc.setLocalDescription()
-        this.noteUfrag(link, 'local', pc.localDescription)
         log.info('oferta enviada', { ...this.who(link), type: pc.localDescription?.type })
         this.signal(peerId, { k: 'desc', desc: pc.localDescription!.toJSON() })
       } catch (err) {
@@ -473,6 +540,11 @@ export class RoomSession {
     })
     pc.addEventListener('signalingstatechange', () => {
       log.info('negociação', { ...this.who(link), signaling: pc.signalingState })
+      // Só descrições aplicadas: uma oferta desfeita numa colisão não é reinício de ICE.
+      if (pc.signalingState === 'stable') {
+        this.noteUfrag(link, 'local', pc.currentLocalDescription)
+        this.noteUfrag(link, 'remote', pc.currentRemoteDescription)
+      }
     })
     pc.addEventListener('connectionstatechange', () => {
       link.status = peerStatus(pc)
@@ -624,11 +696,9 @@ export class RoomSession {
         }
         if (link.ignoreOffer) return
         log.info('descrição recebida', { ...this.who(link), type: signal.desc.type })
-        this.noteUfrag(link, 'remote', signal.desc)
         await pc.setRemoteDescription(this.withHints(signal.desc))
         if (signal.desc.type === 'offer') {
           await pc.setLocalDescription()
-          this.noteUfrag(link, 'local', pc.localDescription)
           log.info('resposta enviada', this.who(link))
           this.signal(from, { k: 'desc', desc: pc.localDescription!.toJSON() })
         }
@@ -669,22 +739,44 @@ export class RoomSession {
 
   // ---------- envio ----------
 
+  /**
+   * Começa a enviar a minha transmissão para essa pessoa. Reaproveita o transceptor de cada tipo:
+   * com addTrack/removeTrack, cada troca de janela criava um novo, e a negociação crescia até o
+   * servidor recusar o sinal (o vídeo parava até a conexão ser refeita).
+   */
   private attach(link: PeerLink): void {
-    if (!this.local || link.senders.length > 0) return
+    if (!this.local || link.senders.length > 0 || link.pc.connectionState === 'closed') return
     const { stream } = this.local
     for (const track of stream.getTracks()) {
-      const sender = link.pc.addTrack(track, stream)
-      link.senders.push(sender)
-      if (track.kind === 'video') {
-        const transceiver = link.pc.getTransceivers().find((t) => t.sender === sender)
-        if (transceiver) preferVideoCodecs(transceiver, CODECS[this.settings.codec].mime)
+      const reused = link.sendTransceivers[track.kind]
+      let transceiver: RTCRtpTransceiver | undefined
+      if (reused && reused.currentDirection !== 'stopped') {
+        transceiver = reused
+        reused.direction = 'sendrecv'
+        reused.sender.setStreams(stream)
+        reused.sender
+          .replaceTrack(track)
+          .catch((err) => log.warn('não foi possível trocar a trilha enviada', { ...this.who(link), error: errorInfo(err) }))
+      } else {
+        const sender = link.pc.addTrack(track, stream)
+        transceiver = link.pc.getTransceivers().find((t) => t.sender === sender)
+        if (transceiver) link.sendTransceivers[track.kind] = transceiver
       }
+      if (!transceiver) continue
+      link.senders.push(transceiver.sender)
+      if (track.kind === 'video') preferVideoCodecs(transceiver, CODECS[this.settings.codec].mime)
     }
   }
 
+  /** Para de enviar para essa pessoa; o transceptor fica para a próxima vez (como no removeTrack, só recebe). */
   private detach(link: PeerLink): void {
     if (link.pc.connectionState === 'closed') return
-    for (const sender of link.senders) link.pc.removeTrack(sender)
+    for (const sender of link.senders) {
+      const transceiver = link.pc.getTransceivers().find((t) => t.sender === sender)
+      if (!transceiver || transceiver.currentDirection === 'stopped') continue
+      transceiver.direction = 'recvonly'
+      sender.replaceTrack(null).catch(() => undefined)
+    }
     link.senders = []
   }
 

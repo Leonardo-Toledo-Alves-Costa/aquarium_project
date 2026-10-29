@@ -25,9 +25,9 @@ async function run(): Promise<void> {
   const cases: [string, () => void, typeof A][] = [
     ['queda 1006 de quem transmite (sem o servidor perceber)', () => dropSignaling(A, 1006), A],
     ['queda 1001 de quem transmite (sem o servidor perceber)', () => dropSignaling(A, 1001), A],
-    ['close real 1000 de quem transmite (servidor percebe)', () => realClose(A, 1000), A],
+    ['close real 4000 de quem transmite (servidor percebe; 1000 agora é saída de propósito)', () => realClose(A, 4000), A],
     ['queda 1006 de quem assiste', () => dropSignaling(B, 1006), B],
-    ['close real 1000 de quem assiste', () => realClose(B, 1000), B]
+    ['close real 4000 de quem assiste', () => realClose(B, 4000), B]
   ]
   for (const [name, act, who] of cases) {
     meter.reset()

@@ -111,7 +111,23 @@ function registerGroupCode(): void {
   })
 }
 
+// Uma janela só no app instalado: abrir de novo traz a que já está aberta. Duas usariam a mesma
+// identidade no grupo, e o servidor derrubaria uma delas. (Em dev fica livre, para testar ao lado do instalado.)
+const single = !app.isPackaged || app.requestSingleInstanceLock()
+if (!single) {
+  log.info('o app já está aberto; esta cópia fecha')
+  app.quit()
+} else {
+  app.on('second-instance', () => {
+    const win = BrowserWindow.getAllWindows()[0]
+    if (!win) return
+    if (win.isMinimized()) win.restore()
+    win.focus()
+  })
+}
+
 app.whenReady().then(() => {
+  if (!single) return
   // Sem o menu padrão no app instalado: os atalhos dele (Ctrl+- e Ctrl+=) mudariam o tamanho da
   // interface inteira, e as teclas - e + já servem para o zoom da transmissão.
   if (app.isPackaged) Menu.setApplicationMenu(null)

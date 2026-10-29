@@ -9,7 +9,7 @@ import {
   type ServerMessage
 } from '../../../shared/rooms-protocol'
 import { fromBase64Url, toBase64Url, type GroupKeys } from '../group/group-code'
-import { logger } from '../log'
+import { errorInfo, logger } from '../log'
 
 const log = logger('sinalizacao')
 
@@ -22,7 +22,7 @@ export interface RoomClientOptions {
   name: string
 }
 
-type SignalHandler = (from: string, payload: unknown) => void
+type SignalHandler = (from: string, payload: unknown) => void | Promise<void>
 
 const RETRY_DELAYS = [500, 1000, 2000, 5000, 10000]
 /** Sem nada do servidor por esse tempo, mando um ping (o servidor responde "pong" sem acordar). */
@@ -37,6 +37,8 @@ export class RoomClient {
   connections = 0
   /** Motivo de uma recusa (código errado, versão antiga) ou do último erro. */
   error: string | null = null
+  /** Quem fechou o app de propósito (aviso do servidor): sem esperar a volta dessa pessoa. */
+  readonly departed = new Set<string>()
 
   private ws?: WebSocket
   private listeners = new Set<() => void>()
@@ -59,8 +61,12 @@ export class RoomClient {
 
   constructor(private readonly options: RoomClientOptions) {
     this.heartbeatTimer = setInterval(() => this.heartbeat(), 1000)
+    // Fechar a janela avisa o servidor na hora (código 1000), e ele avisa os outros.
+    window.addEventListener('pagehide', this.onPageHide)
     this.connect()
   }
+
+  private onPageHide = (): void => this.close()
 
   get peerId(): string {
     return this.options.peerId
@@ -127,7 +133,8 @@ export class RoomClient {
     this.closed = true
     clearInterval(this.heartbeatTimer)
     clearTimeout(this.retryTimer)
-    this.ws?.close()
+    window.removeEventListener('pagehide', this.onPageHide)
+    this.ws?.close(1000)
   }
 
   /**
@@ -143,7 +150,8 @@ export class RoomClient {
       // Não espero o close desse socket: ele pode demorar ou nunca chegar.
       this.ws = undefined
       try {
-        ws.close()
+        // Código de queda, não de saída: se chegar ao servidor, os outros continuam esperando a volta.
+        ws.close(4000)
       } catch {
         // Já fechado.
       }
@@ -276,8 +284,15 @@ export class RoomClient {
         this.inbox = this.inbox.then(async () => {
           const payload = await this.decrypt(message.from, message.data)
           if (payload === undefined) return
-          for (const handler of this.signalHandlers) handler(message.from, payload)
-        })
+          // Um sinal só depois do anterior terminar: um candidato ICE aplicado antes da resposta que o
+          // precede terminar de entrar seria recusado e perdido.
+          for (const handler of this.signalHandlers) await handler(message.from, payload)
+        }).catch((err) => log.warn('falha ao tratar um sinal', { from: message.from, error: errorInfo(err) }))
+        break
+      case 'left':
+        log.info('saiu do grupo (fechou o app)', { peer: message.peerId })
+        this.departed.add(message.peerId)
+        this.emit()
         break
       case 'error':
         log.warn('erro do servidor', { code: message.code, message: message.message })
@@ -290,6 +305,7 @@ export class RoomClient {
   private setState(state: GroupState): void {
     if (state !== this.state) logPresence(this.state, state, this.options.peerId)
     this.state = state
+    for (const m of state.members) this.departed.delete(m.peerId)
     // A sala em que eu estava foi apagada: o servidor já me tirou dela; não tento voltar numa reconexão.
     if (this.roomId !== null && !state.rooms.some((r) => r.id === this.roomId)) {
       log.info('a sala em que eu estava foi apagada', { roomId: this.roomId })

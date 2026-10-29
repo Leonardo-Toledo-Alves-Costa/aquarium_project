@@ -178,6 +178,13 @@ export class GroupRoom extends DurableObject<Env> {
       streaming: connection.streaming,
       upMs: connection.openedAt ? Date.now() - connection.openedAt : undefined
     })
+    // 1000/1001: o app fechou a conexão de propósito (saiu do grupo, fechou a janela). Os outros
+    // deixam de esperar a volta dessa pessoa; numa queda, o código é outro.
+    if (connection.authed && connection.peerId && (code === 1000 || code === 1001)) {
+      for (const other of this.ctx.getWebSockets()) {
+        if (other !== ws && (other.deserializeAttachment() as Connection).authed) this.send(other, { t: 'left', peerId: connection.peerId })
+      }
+    }
     this.broadcastState(ws)
   }
 

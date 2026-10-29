@@ -70,6 +70,8 @@ export type ServerMessage =
   | { t: 'state'; state: GroupState }
   | { t: 'signal'; from: string; data: string }
   | { t: 'error'; code: ErrorCode; message: string }
+  /** Alguém fechou o app ou saiu do grupo de propósito (não foi queda): não precisa esperar a volta. */
+  | { t: 'left'; peerId: string }
 
 /** Códigos de fechamento do WebSocket usados pelo servidor. */
 export const CLOSE = {
