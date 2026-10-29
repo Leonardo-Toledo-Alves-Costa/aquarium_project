@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { audioOptions, startCapture, type Capture } from '../capture'
+import { errorInfo, logger } from '../log'
 import { PRESETS } from '../rtc/presets'
 import type { RoomSession } from '../rtc/room-session'
 import { getSettings, updateSettings, useSettings } from '../settings'
@@ -13,6 +14,8 @@ import { SourcePicker } from './SourcePicker'
 import { useRoomSounds } from './sounds'
 import { buildTiles, OwnMenu, RemoteMenu, StreamTabs, TileView, type Tile, type ZoomAction } from './Stage'
 import { ownDiagnostics, StreamOptions } from './StreamOptions'
+
+const log = logger('palco')
 
 interface Confirm {
   title: string
@@ -179,7 +182,7 @@ export function Palco({
         if (captureRef.current === capture) captureRef.current = null
       })
     } catch (err) {
-      console.error(err)
+      log.error('falha ao começar a transmissão', { error: errorInfo(err) })
       setError('Não foi possível capturar essa tela ou janela. Tente outra.')
     }
   }

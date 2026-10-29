@@ -5,6 +5,9 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { IPC, type AudioOptions } from '../shared/ipc'
+import { errorDetails, logger } from './log'
+
+const log = logger('audio')
 
 const FRAME_BYTES = 4 // 2 canais × 16 bits
 
@@ -75,7 +78,7 @@ class AudioCapture {
     if (options.mode === 'none' || process.platform !== 'win32') return
     const exe = helperPath()
     if (!existsSync(exe)) {
-      console.warn('aquarium-audio.exe não encontrado em', exe)
+      log.warn('aquarium-audio.exe não encontrado', { exe })
       return
     }
     // Tela inteira não tem "o app": nesse caso vale "todos os apps".
@@ -84,7 +87,7 @@ class AudioCapture {
     const args = [mode, '--parent', String(process.pid), '--block', options.blocked.join(',')]
     if (mode === 'app') args.push('--window', windowMatch![1])
 
-    console.log('[aquarium-audio] iniciando:', args.join(' '), `(fonte ${options.sourceId})`)
+    log.info('iniciando aquarium-audio', { args: args.join(' '), fonte: options.sourceId })
     const child = spawn(exe, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
     this.child = child
     this.leftover = Buffer.alloc(0)
@@ -95,10 +98,13 @@ class AudioCapture {
       this.leftover = all.subarray(usable)
       if (usable > 0 && this.port) this.port.postMessage(new Uint8Array(all.subarray(0, usable)))
     })
-    child.stderr!.on('data', (data: Buffer) => console.log('[aquarium-audio]', data.toString().trim()))
-    child.on('exit', (code) => {
+    child.stderr!.on('data', (data: Buffer) => log.info(`aquarium-audio: ${data.toString().trim()}`))
+    // Sem isto, uma falha ao abrir o .exe viraria uma exceção não tratada.
+    child.on('error', (err) => log.error('aquarium-audio não abriu', errorDetails(err)))
+    child.on('exit', (code, signal) => {
       if (this.child === child) this.child = null
-      if (code) console.warn('aquarium-audio saiu com código', code)
+      if (code) log.warn('aquarium-audio saiu com erro', { code, signal })
+      else log.info('aquarium-audio saiu', { code, signal })
     })
   }
 

@@ -9,6 +9,9 @@ import {
   type ServerMessage
 } from '../../../shared/rooms-protocol'
 import { fromBase64Url, toBase64Url, type GroupKeys } from '../group/group-code'
+import { logger } from '../log'
+
+const log = logger('sinalizacao')
 
 export type ConnectionStatus = 'conectando' | 'conectado' | 'reconectando' | 'recusado'
 
@@ -42,6 +45,8 @@ export class RoomClient {
   private streaming: { active: boolean; label?: string } = { active: false }
   /** Voltando para a sala depois de uma queda, até o servidor confirmar. */
   private rejoining = false
+  /** Sinais que não saíram porque o servidor estava desconectado (só para o log). */
+  private unsent = { count: 0, to: new Set<string>() }
   /** Sinais são decifrados e entregues em fila, na ordem em que chegaram. */
   private inbox: Promise<void> = Promise.resolve()
 
@@ -68,12 +73,14 @@ export class RoomClient {
   }
 
   join(roomId: string | null): void {
+    log.info(roomId === null ? 'saindo da sala' : 'entrando na sala', { roomId, from: this.roomId })
     this.roomId = roomId
     if (roomId === null) this.streaming = { active: false }
     this.send({ t: 'join', roomId })
   }
 
   setStreaming(active: boolean, label?: string): void {
+    log.info(active ? 'transmissão anunciada' : 'fim da transmissão anunciado')
     this.streaming = { active, label }
     this.send({ t: 'stream', active, label })
   }
@@ -108,6 +115,7 @@ export class RoomClient {
   }
 
   close(): void {
+    log.info('desconectando do servidor (fechado pelo app)')
     this.closed = true
     clearInterval(this.pingTimer)
     clearTimeout(this.retryTimer)
@@ -116,10 +124,16 @@ export class RoomClient {
 
   private connect(): void {
     const url = `${this.options.serverUrl.replace(/\/$/, '')}/g/${this.options.keys.id}/ws`
+    // Só o servidor: o caminho da URL tem o id do grupo.
+    log.info('conectando ao servidor', { host: new URL(url).host, attempt: this.retry })
     const ws = new WebSocket(url)
     this.ws = ws
+    let openedAt = 0
+    let welcomed = this.connections
 
     ws.addEventListener('open', () => {
+      openedAt = Date.now()
+      log.info('websocket aberto')
       ws.send(
         JSON.stringify({
           t: 'hello',
@@ -144,20 +158,36 @@ export class RoomClient {
       this.handle(message)
     })
 
+    ws.addEventListener('error', () => log.warn('erro no websocket'))
+
     ws.addEventListener('close', (event) => {
       clearInterval(this.pingTimer)
-      if (this.closed || this.ws !== ws) return
+      const details = {
+        code: event.code,
+        reason: event.reason,
+        wasClean: event.wasClean,
+        upMs: openedAt ? Date.now() - openedAt : null,
+        welcomed: this.connections > welcomed
+      }
+      if (this.closed || this.ws !== ws) {
+        log.info('websocket antigo fechado', details)
+        return
+      }
+      log.warn('websocket fechado', details)
+      this.logUnsent()
       if (event.code === CLOSE.auth || event.code === CLOSE.version || event.code === CLOSE.replaced) {
         this.status = 'recusado'
         // Versão recusada pelo servidor: procura a atualização agora, sem esperar a próxima verificação.
         if (event.code === CLOSE.version) void window.aquarium.checkForUpdates()
         if (event.code === CLOSE.replaced) this.error = 'Você abriu o Aquarium em outro lugar com este mesmo aparelho.'
+        log.error('conexão recusada pelo servidor; sem nova tentativa', { code: event.code })
         this.emit()
         return
       }
       this.status = 'reconectando'
       this.emit()
       const delay = RETRY_DELAYS[Math.min(this.retry++, RETRY_DELAYS.length - 1)]
+      log.info('nova tentativa agendada', { delayMs: delay, attempt: this.retry })
       this.retryTimer = setTimeout(() => this.connect(), delay)
     })
   }
@@ -170,6 +200,14 @@ export class RoomClient {
         this.status = 'conectado'
         this.error = null
         this.rejoining = false
+        this.logUnsent()
+        log.info('conectado ao servidor', {
+          connections: this.connections,
+          members: message.state.members.length,
+          rooms: message.state.rooms.length,
+          rejoin: this.roomId,
+          streaming: this.streaming.active
+        })
         this.setState(message.state)
         // Volta para a sala e o estado em que estava (depois de uma queda, ou pedidos feitos antes de conectar).
         if (this.roomId !== null) {
@@ -192,6 +230,7 @@ export class RoomClient {
         })
         break
       case 'error':
+        log.warn('erro do servidor', { code: message.code, message: message.message })
         this.error = message.message
         this.emit()
         break
@@ -199,9 +238,11 @@ export class RoomClient {
   }
 
   private setState(state: GroupState): void {
+    if (state !== this.state) logPresence(this.state, state, this.options.peerId)
     this.state = state
     // A sala em que eu estava foi apagada: o servidor já me tirou dela; não tento voltar numa reconexão.
     if (this.roomId !== null && !state.rooms.some((r) => r.id === this.roomId)) {
+      log.info('a sala em que eu estava foi apagada', { roomId: this.roomId })
       this.roomId = null
       this.streaming = { active: false }
       this.rejoining = false
@@ -209,6 +250,7 @@ export class RoomClient {
     if (!this.rejoining) return
     const me = this.me
     if (me?.roomId === this.roomId && me.streaming === this.streaming.active) {
+      log.info('servidor confirmou a volta para a sala', { roomId: this.roomId })
       this.rejoining = false
     } else if (me) {
       // Até o servidor confirmar, vale a sala de antes. Sem isso, a sessão veria "fora da sala"
@@ -228,16 +270,52 @@ export class RoomClient {
       return JSON.parse(new TextDecoder().decode(plain))
     } catch {
       // Sinal adulterado ou de quem não tem a chave do grupo: ignorado.
+      log.warn('sinal ignorado: não foi possível decifrar', { from })
       return undefined
     }
   }
 
   /** Só depois do "welcome": antes disso o servidor ainda confere a senha e recusaria. */
   private send(message: ClientMessage): void {
-    if (this.status === 'conectado' && this.ws?.readyState === WebSocket.OPEN) this.ws.send(JSON.stringify(message))
+    if (this.status === 'conectado' && this.ws?.readyState === WebSocket.OPEN) {
+      this.ws.send(JSON.stringify(message))
+    } else if (message.t === 'signal') {
+      // Perdido de vez: o app não reenvia sinais. Uma oferta perdida aqui pode travar a conexão.
+      this.unsent.count++
+      this.unsent.to.add(message.to)
+    }
+  }
+
+  private logUnsent(): void {
+    if (this.unsent.count === 0) return
+    log.warn('sinais não enviados enquanto desconectado', { count: this.unsent.count, to: [...this.unsent.to] })
+    this.unsent = { count: 0, to: new Set() }
   }
 
   private emit(): void {
     for (const listener of this.listeners) listener()
   }
+}
+
+/** Quem entrou, saiu, mudou de sala ou começou/parou de transmitir, comparando dois estados do grupo. */
+function logPresence(before: GroupState, after: GroupState, self: string): void {
+  const old = new Map(before.members.map((m) => [m.peerId, m]))
+  for (const m of after.members) {
+    // A minha própria entrada muda de mentira durante a volta para a sala (ver setState).
+    if (m.peerId === self) {
+      old.delete(self)
+      continue
+    }
+    const prev = old.get(m.peerId)
+    old.delete(m.peerId)
+    const who = { peer: m.peerId, name: m.name }
+    if (!prev) {
+      log.info('ficou online', { ...who, roomId: m.roomId, streaming: m.streaming })
+      continue
+    }
+    if (prev.roomId !== m.roomId) log.info('mudou de sala', { ...who, from: prev.roomId, to: m.roomId })
+    if (prev.streaming !== m.streaming) log.info(m.streaming ? 'começou a transmitir' : 'parou de transmitir', who)
+  }
+  old.delete(self)
+  for (const m of old.values()) log.info('ficou offline', { peer: m.peerId, name: m.name, roomId: m.roomId })
 }

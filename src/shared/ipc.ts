@@ -15,6 +15,9 @@ export interface AudioOptions {
   blocked: string[]
 }
 
+export const LOG_LEVELS = ['info', 'warn', 'error'] as const
+export type LogLevel = (typeof LOG_LEVELS)[number]
+
 /** Atualização baixada e com a assinatura conferida, esperando o app reiniciar. */
 export type UpdateState = { ready: false } | { ready: true; version: string }
 
@@ -42,6 +45,10 @@ export interface AquariumApi {
   checkForUpdates(): Promise<void>
   /** Transmitindo ou assistindo: o download da atualização espera, e reiniciar pede confirmação. */
   setBusy(busy: boolean): Promise<void>
+  /** Grava uma linha no arquivo de log (sem resposta). `details` precisa ser um objeto simples. */
+  log(level: LogLevel, scope: string, message: string, details?: unknown): void
+  /** Abre no Explorer a pasta com os arquivos de log, para mandar a quem cuida do app. */
+  openLogsFolder(): Promise<void>
   platform: string
 }
 
@@ -58,5 +65,7 @@ export const IPC = {
   updateState: 'updater:state',
   installUpdate: 'updater:install',
   checkForUpdates: 'updater:check',
-  setBusy: 'updater:busy'
+  setBusy: 'updater:busy',
+  log: 'log:write',
+  openLogsFolder: 'log:open-folder'
 } as const

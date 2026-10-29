@@ -1,7 +1,10 @@
+import { errorInfo, logger } from '../log'
 import { createPeerConnection, peerStatus, preferVideoCodecs, waitForIceGathering, type PeerStatus } from './peer'
 import { CODECS, PRIORITIES, type CodecChoice, type StreamSettings } from './presets'
 import { withBitrateHints } from './sdp'
 import { StatsSampler } from './stats'
+
+const log = logger('manual')
 
 export interface ViewerSlot {
   id: number
@@ -164,7 +167,7 @@ export class Broadcaster {
         ...(preset.maxHeight ? { height: { max: preset.maxHeight } } : {})
       })
     } catch (err) {
-      console.warn('Não foi possível ajustar a captura', err)
+      log.warn('não foi possível ajustar a captura', { error: errorInfo(err) })
     }
   }
 
@@ -181,7 +184,7 @@ export class Broadcaster {
       try {
         await sender.setParameters(params)
       } catch (err) {
-        console.warn('Não foi possível ajustar o envio', err)
+        log.warn('não foi possível ajustar o envio', { error: errorInfo(err) })
       }
     }
   }

@@ -2,6 +2,7 @@ import { useEffect, useReducer, useRef, useState } from 'react'
 import type { CaptureSource } from '../../../shared/ipc'
 import { CopyBox, CopyDiagnosticsButton, FailureHelp, StatsLine, StatusChip, useStats } from '../components/common'
 import { formatDiagnostics } from '../diagnostics'
+import { errorInfo, logger } from '../log'
 import { Broadcaster, type ViewerSlot } from '../rtc/broadcaster'
 import {
   CODECS,
@@ -13,6 +14,8 @@ import {
   type StreamSettings
 } from '../rtc/presets'
 import { CodeError, decodeDescription, encodeDescription } from '../signaling/manual'
+
+const log = logger('manual')
 
 export function TransmitView(): React.JSX.Element {
   const [sources, setSources] = useState<CaptureSource[] | null>(null)
@@ -54,7 +57,7 @@ export function TransmitView(): React.JSX.Element {
       await window.aquarium.selectSource(sourceId)
       setBroadcaster(await Broadcaster.start(settings))
     } catch (err) {
-      console.error(err)
+      log.error('falha ao começar a transmissão (modo manual)', { error: errorInfo(err) })
       setError('Não foi possível capturar essa fonte. Tente outra tela ou janela.')
     } finally {
       setBusy(false)

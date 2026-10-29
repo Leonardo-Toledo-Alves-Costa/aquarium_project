@@ -18,6 +18,8 @@ const api: AquariumApi = {
   installUpdate: () => ipcRenderer.invoke(IPC.installUpdate),
   checkForUpdates: () => ipcRenderer.invoke(IPC.checkForUpdates),
   setBusy: (busy) => ipcRenderer.invoke(IPC.setBusy, busy),
+  log: (level, scope, message, details) => ipcRenderer.send(IPC.log, level, scope, message, details),
+  openLogsFolder: () => ipcRenderer.invoke(IPC.openLogsFolder),
   platform: process.platform
 }
 

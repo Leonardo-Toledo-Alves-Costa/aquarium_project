@@ -1,5 +1,9 @@
 // Peças comuns a quem transmite e a quem assiste.
 
+import { errorInfo, logger } from '../log'
+
+const log = logger('rtc')
+
 // Servidores STUN públicos: só informam o endereço público de cada PC, nunca veem o vídeo.
 export const ICE_SERVERS: RTCIceServer[] = [
   { urls: 'stun:stun.l.google.com:19302' },
@@ -76,6 +80,6 @@ export function preferVideoCodecs(transceiver: RTCRtpTransceiver, preferredMime?
   try {
     transceiver.setCodecPreferences(sorted)
   } catch (err) {
-    console.warn('Não foi possível definir a preferência de codec', err)
+    log.warn('não foi possível definir a preferência de codec', { error: errorInfo(err) })
   }
 }

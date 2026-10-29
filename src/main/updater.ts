@@ -13,7 +13,10 @@ import { createReadStream } from 'node:fs'
 import { rm } from 'node:fs/promises'
 import { IPC, type UpdateState } from '../shared/ipc'
 import { stopAudioCapture } from './audio'
+import { logger } from './log'
 import { UPDATE_PUBLIC_KEY } from './update-key'
+
+const log = logger('updater')
 
 const FIRST_CHECK_DELAY = 5_000
 const CHECK_INTERVAL = 4 * 60 * 60_000
@@ -61,7 +64,7 @@ function check(): void {
     deferred = true
     return
   }
-  autoUpdater.checkForUpdates().catch((err: Error) => console.warn('[updater]', err.message))
+  autoUpdater.checkForUpdates().catch((err: Error) => log.warn('falha ao procurar atualização', { message: err.message }))
 }
 
 function download(): void {
@@ -72,7 +75,7 @@ function download(): void {
   downloading = true
   autoUpdater.downloadUpdate().catch((err: Error) => {
     downloading = false
-    console.warn('[updater]', err.message)
+    log.warn('falha ao baixar atualização', { message: err.message })
   })
 }
 
@@ -93,6 +96,7 @@ async function restartAndInstall(): Promise<void> {
     if (response !== 0) return
   }
   restarting = true
+  log.info('reiniciando para instalar', { version: state.version })
   await stopAudioCapture()
   // Silencioso e reabrindo o app no fim.
   autoUpdater.quitAndInstall(true, true)
@@ -122,17 +126,19 @@ export function registerUpdater(): void {
   autoUpdater.disableWebInstaller = true
 
   autoUpdater.on('update-available', (info) => {
+    log.info('atualização disponível', { version: info.version })
     if (info.version !== rejectedVersion) download()
   })
   autoUpdater.on('update-downloaded', async (event) => {
     downloading = false
     if (!(await isSigned(event))) {
-      console.warn('[updater] assinatura inválida ou ausente na versão', event.version)
+      log.warn('assinatura inválida ou ausente', { version: event.version })
       rejectedVersion = event.version
       await rm(event.downloadedFile, { force: true })
       return
     }
     if (state.ready) return
+    log.info('atualização baixada e conferida', { version: event.version })
     setState({ ready: true, version: event.version })
     // Quem clicou em "Depois" recebe a versão nova ao fechar o app.
     app.once('quit', (_event, exitCode) => {
@@ -142,7 +148,7 @@ export function registerUpdater(): void {
   })
   autoUpdater.on('error', (err) => {
     downloading = false
-    console.warn('[updater]', err.message)
+    log.warn('erro no atualizador', { message: err.message })
   })
 
   setTimeout(check, FIRST_CHECK_DELAY)

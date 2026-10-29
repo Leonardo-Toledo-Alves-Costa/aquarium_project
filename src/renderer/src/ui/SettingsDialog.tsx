@@ -381,6 +381,17 @@ function NetworkSection({ client, onManual }: { client: RoomClient; onManual: ()
         </div>
         <span className="field-hint">O modo antigo: um convite e uma resposta trocados por mensagem, para quando o servidor estiver fora do ar.</span>
       </div>
+      <div className="field">
+        <span className="field-label">Registro de conexão</span>
+        <div className="choice-row">
+          <button className="btn" onClick={() => void window.aquarium.openLogsFolder()}>
+            Abrir pasta dos logs
+          </button>
+        </div>
+        <span className="field-hint">
+          Se a conexão cair ou travar, mande o arquivo do dia (aquarium-ano-mês-dia.log) para quem cuida do app. Ele não guarda o código do grupo nem endereços IP.
+        </span>
+      </div>
     </div>
   )
 }

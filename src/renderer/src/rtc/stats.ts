@@ -56,6 +56,44 @@ function ipVersionOf(...addresses: (string | undefined)[]): RouteInfo['ipVersion
   return '?'
 }
 
+/** Par de candidatos em uso agora e o tipo de cada lado (sem os endereços). */
+function routeOf(byId: Map<string, Stat>, direction: 'enviando' | 'recebendo'): RouteInfo | undefined {
+  let pair: Stat | undefined
+  for (const s of byId.values()) {
+    if (s.type === 'transport' && s.selectedCandidatePairId) pair = byId.get(s.selectedCandidatePairId)
+  }
+  if (!pair) {
+    for (const s of byId.values()) {
+      if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.nominated) pair = s
+    }
+  }
+  if (!pair) return undefined
+  const local = byId.get(pair.localCandidateId)
+  const remote = byId.get(pair.remoteCandidateId)
+  if (!local || !remote) return undefined
+  return {
+    direct: local.candidateType !== 'relay' && remote.candidateType !== 'relay',
+    localType: local.candidateType,
+    remoteType: remote.candidateType,
+    ipVersion: ipVersionOf(remote.address, local.address),
+    protocol: local.protocol,
+    rttMs: typeof pair.currentRoundTripTime === 'number' ? Math.round(pair.currentRoundTripTime * 1000) : undefined,
+    // Do lado de quem assiste, essa estimativa é da banda de volta (controle), não do vídeo.
+    availableKbps:
+      direction === 'enviando' && typeof pair.availableOutgoingBitrate === 'number'
+        ? Math.round(pair.availableOutgoingBitrate / 1000)
+        : undefined
+  }
+}
+
+/** Rota da conexão agora, para o log. */
+export async function currentRoute(pc: RTCPeerConnection): Promise<RouteInfo | undefined> {
+  const report = await pc.getStats()
+  const byId = new Map<string, Stat>()
+  report.forEach((s: Stat) => byId.set(s.id, s))
+  return routeOf(byId, 'enviando')
+}
+
 const round1 = (n: number): number => Math.round(n * 10) / 10
 
 export class StatsSampler {
@@ -72,42 +110,16 @@ export class StatsSampler {
     const byId = new Map<string, Stat>()
     report.forEach((s: Stat) => byId.set(s.id, s))
 
-    let pair: Stat | undefined
     let rtp: Stat | undefined
     let source: Stat | undefined
     const rtpType = this.direction === 'enviando' ? 'outbound-rtp' : 'inbound-rtp'
     for (const s of byId.values()) {
-      if (s.type === 'transport' && s.selectedCandidatePairId) pair = byId.get(s.selectedCandidatePairId)
       if (s.type === rtpType && s.kind === 'video') rtp = s
       if (s.type === 'media-source' && s.kind === 'video') source = s
     }
-    if (!pair) {
-      for (const s of byId.values()) {
-        if (s.type === 'candidate-pair' && s.state === 'succeeded' && s.nominated) pair = s
-      }
-    }
 
     const sample: StatsSample = {}
-
-    if (pair) {
-      const local = byId.get(pair.localCandidateId)
-      const remote = byId.get(pair.remoteCandidateId)
-      if (local && remote) {
-        sample.route = {
-          direct: local.candidateType !== 'relay' && remote.candidateType !== 'relay',
-          localType: local.candidateType,
-          remoteType: remote.candidateType,
-          ipVersion: ipVersionOf(remote.address, local.address),
-          protocol: local.protocol,
-          rttMs: typeof pair.currentRoundTripTime === 'number' ? Math.round(pair.currentRoundTripTime * 1000) : undefined,
-          // Do lado de quem assiste, essa estimativa é da banda de volta (controle), não do vídeo.
-          availableKbps:
-            this.direction === 'enviando' && typeof pair.availableOutgoingBitrate === 'number'
-              ? Math.round(pair.availableOutgoingBitrate / 1000)
-              : undefined
-        }
-      }
-    }
+    sample.route = routeOf(byId, this.direction)
 
     if (rtp) {
       sample.fps = rtp.framesPerSecond

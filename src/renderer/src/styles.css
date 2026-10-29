@@ -786,7 +786,8 @@ kbd {
 }
 .stage.fullscreen.idle .stream-bar,
 .stage.idle .tile .hud,
-.stage.idle .tile .zoom-pill {
+.stage.idle .tile .zoom-pill,
+.stage.idle .tile .stats-chip {
   opacity: 0;
   pointer-events: none;
 }
@@ -890,6 +891,7 @@ kbd {
   border-radius: 6px;
   color: var(--fg-2);
   font-size: 12px;
+  transition: opacity 0.2s;
 }
 .zoom-pill {
   left: 12px;

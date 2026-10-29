@@ -4,6 +4,8 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-09-01",
   "workers_dev": true,
+  // Workers Logs: guarda o que o código registra (console.log) para ver no painel da Cloudflare.
+  "observability": { "enabled": true },
   "durable_objects": {
     "bindings": [{ "name": "GROUPS", "class_name": "GroupRoom" }]
   },

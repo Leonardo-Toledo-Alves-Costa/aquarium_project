@@ -1,9 +1,13 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, safeStorage, session } from 'electron'
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, powerMonitor, safeStorage, session } from 'electron'
 import { readFile, rm, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { IPC, type CaptureSource } from '../shared/ipc'
 import { registerAudio } from './audio'
+import { logger, registerLog, startLog } from './log'
 import { registerUpdater } from './updater'
+
+startLog()
+const log = logger('main')
 
 // Permissões que a interface pode usar. Todo o resto é negado.
 const ALLOWED_PERMISSIONS = new Set(['display-capture', 'media', 'clipboard-sanitized-write', 'fullscreen'])
@@ -35,6 +39,9 @@ function createWindow(): void {
   })
 
   win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('unresponsive', () => log.warn('a interface parou de responder'))
+  win.webContents.on('responsive', () => log.info('a interface voltou a responder'))
+  win.webContents.on('did-fail-load', (_event, code, description) => log.error('a interface não carregou', { code, description }))
   win.webContents.on('will-navigate', (event, url) => {
     if (url !== win.webContents.getURL()) event.preventDefault()
   })
@@ -113,6 +120,11 @@ app.whenReady().then(() => {
   })
   session.defaultSession.setPermissionCheckHandler((_wc, permission) => ALLOWED_PERMISSIONS.has(permission))
 
+  // Suspender e voltar derruba as conexões; ajuda a explicar quedas no log.
+  powerMonitor.on('suspend', () => log.info('computador suspenso'))
+  powerMonitor.on('resume', () => log.info('computador voltou da suspensão'))
+
+  registerLog()
   registerCapture()
   registerGroupCode()
   registerAudio()

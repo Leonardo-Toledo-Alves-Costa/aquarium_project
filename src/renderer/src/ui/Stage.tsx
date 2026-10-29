@@ -299,7 +299,7 @@ export function TileView({
         </div>
       )}
       {tile.kind === 'remote' && stats?.height && (
-        <div className="tile-chip mono">
+        <div className="tile-chip mono stats-chip">
           {stats.height}p · {Math.round(stats.fps ?? 0)} fps{stats.route?.rttMs !== undefined ? ` · ${stats.route.rttMs} ms` : ''}
         </div>
       )}

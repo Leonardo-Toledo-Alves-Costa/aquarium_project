@@ -19,3 +19,9 @@ server/.dev.vars
 
 # Rascunhos de planos dos agentes (ficam só na máquina).
 docs/plans/
+
+# Saída dos testes de conexão (scripts/e2e).
+scripts/e2e/out/
+
+# Cópias de trabalho dos agentes paralelos.
+.claude/worktrees/

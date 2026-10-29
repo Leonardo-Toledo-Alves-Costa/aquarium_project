@@ -2,8 +2,11 @@
 
 import type { AudioOptions, CaptureSource } from '../../shared/ipc'
 import { startAppAudio, type AppAudio } from './audio/app-audio'
+import { errorInfo, logger } from './log'
 import type { Preset } from './rtc/presets'
 import { ALWAYS_BLOCKED, type AppSettings } from './settings'
+
+const log = logger('captura')
 
 export interface Capture {
   stream: MediaStream
@@ -27,7 +30,7 @@ export async function startCapture(source: CaptureSource, preset: Preset, settin
     audio = await startAppAudio(audioOptions(source, settings), settings.sendVolume)
     stream.addTrack(audio.track)
   } catch (err) {
-    console.warn('Transmissão sem áudio: a captura por programa não iniciou', err)
+    log.warn('transmissão sem áudio: a captura por programa não iniciou', { error: errorInfo(err) })
   }
 
   return {
